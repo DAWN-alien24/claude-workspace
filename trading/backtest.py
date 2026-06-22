@@ -1,9 +1,11 @@
 """
-Golden Hour ICT/SMC FVG Strategy – Python Backtest
-Instrument : GC=F (Gold Futures continuous, via yfinance)
+Golden Hour ICT FVG + Fractal TP Strategy – Python Backtest  (v2)
+Instrument : GC synthetic (Gold Futures proxy)
 Timeframe  : 5-minute bars
 Sessions   : London Open 02:00-05:00 ET  |  NY Open 08:00-11:00 ET
 Logic      : Catalyst candle → FVG forms → wait for retest → enter at midpoint
+             Take-profit: nearest Bill Williams Bear/Bull Fractal above/below entry
+             Fallback TP: 0.49 × risk (actual Chanelle parameter from Lucid Flex)
 """
 
 import warnings
@@ -29,8 +31,11 @@ PERIOD          = "1y"
 ATR_LEN         = 14
 CATALYST_MULT   = 1.5          # body must be > 1.5 × ATR
 FVG_ENTRY_PCT   = 0.5          # 0 = top of gap, 1 = bottom, 0.5 = midpoint
-RR              = 2.0          # Risk : Reward
-SL_BUFFER       = 0.3          # extra SL buffer = 0.3 × ATR
+RR_FALLBACK     = 0.49         # fallback R:R when no fractal found (Chanelle's 0.49 from Lucid Flex)
+SL_BUFFER       = 0.3          # SL buffer = 0.3 × ATR
+FRACTAL_ARMS    = 2            # 5-bar fractal (arms=2): high[2] highest of 5 bars
+FRACTAL_LB      = 60           # bars to look back for nearest fractal
+MIN_FRAC_RR     = 0.35         # skip fractal TPs that give less than this R:R
 
 ET = pytz.timezone("America/New_York")
 
@@ -121,16 +126,15 @@ print(f"  → {len(df):,} bars  ({df.index[0].date()} to {df.index[-1].date()})"
 # ──────────────────────────────────────────────
 # 2.  INDICATORS
 # ──────────────────────────────────────────────
-df["body"]     = (df["Close"] - df["Open"]).abs()
-df["tr"]       = np.maximum(df["High"] - df["Low"],
-                 np.maximum((df["High"] - df["Close"].shift(1)).abs(),
-                            (df["Low"]  - df["Close"].shift(1)).abs()))
-df["atr"]      = df["tr"].ewm(span=ATR_LEN, adjust=False).mean()
+df["body"] = (df["Close"] - df["Open"]).abs()
+df["tr"]   = np.maximum(df["High"] - df["Low"],
+             np.maximum((df["High"] - df["Close"].shift(1)).abs(),
+                        (df["Low"]  - df["Close"].shift(1)).abs()))
+df["atr"]  = df["tr"].ewm(span=ATR_LEN, adjust=False).mean()
 
 df["bull_cat"] = (df["Close"] > df["Open"]) & (df["body"] > CATALYST_MULT * df["atr"])
 df["bear_cat"] = (df["Close"] < df["Open"]) & (df["body"] > CATALYST_MULT * df["atr"])
 
-# Session mask
 def in_session(idx):
     h = idx.hour + idx.minute / 60.0
     return any(s <= h < e for _, s, e in SESSIONS)
@@ -138,9 +142,57 @@ def in_session(idx):
 df["in_ses"] = df.index.map(in_session)
 
 # ──────────────────────────────────────────────
-# 3.  FVG DETECTION
-#  Bullish FVG : low[0] > high[2]  AND  bull_cat[1]  AND  in_ses[1]
-#  Bearish FVG : high[0] < low[2]  AND  bear_cat[1]  AND  in_ses[1]
+# 3.  BILL WILLIAMS FRACTAL DETECTION
+#  Bear fractal (local HIGH, TP for LONG):
+#    high[N] > high[N±1], high[N±2], ...
+#  Bull fractal (local LOW, TP for SHORT):
+#    low[N]  < low[N±1],  low[N±2], ...
+#  Default N=2 → 5-bar fractal
+# ──────────────────────────────────────────────
+N = FRACTAL_ARMS
+
+def is_bear_fractal_at(highs, i):
+    if i < N or i + N >= len(highs):
+        return False
+    h = highs[i]
+    for k in range(1, N+1):
+        if not (h > highs[i-k] and h > highs[i+k]):
+            return False
+    return True
+
+def is_bull_fractal_at(lows, i):
+    if i < N or i + N >= len(lows):
+        return False
+    l = lows[i]
+    for k in range(1, N+1):
+        if not (l < lows[i-k] and l < lows[i+k]):
+            return False
+    return True
+
+H = df["High"].values
+L = df["Low"].values
+n_bars = len(df)
+
+bear_frac_flag  = np.zeros(n_bars, dtype=bool)
+bull_frac_flag  = np.zeros(n_bars, dtype=bool)
+bear_frac_level = np.full(n_bars, np.nan)
+bull_frac_level = np.full(n_bars, np.nan)
+
+for i in range(N, n_bars - N):
+    if is_bear_fractal_at(H, i):
+        bear_frac_flag[i]  = True
+        bear_frac_level[i] = H[i]
+    if is_bull_fractal_at(L, i):
+        bull_frac_flag[i]  = True
+        bull_frac_level[i] = L[i]
+
+df["bear_frac"] = bear_frac_flag
+df["bull_frac"] = bull_frac_flag
+df["bear_frac_lvl"] = bear_frac_level
+df["bull_frac_lvl"] = bull_frac_level
+
+# ──────────────────────────────────────────────
+# 4.  FVG DETECTION
 # ──────────────────────────────────────────────
 df["bull_fvg"] = (
     (df["Low"]  > df["High"].shift(2)) &
@@ -153,8 +205,7 @@ df["bear_fvg"] = (
     df["in_ses"].shift(1)
 )
 
-# FVG zone bounds
-df["bfvg_top"] = np.where(df["bull_fvg"], df["Low"],         np.nan)
+df["bfvg_top"] = np.where(df["bull_fvg"], df["Low"],           np.nan)
 df["bfvg_bot"] = np.where(df["bull_fvg"], df["High"].shift(2), np.nan)
 df["sfvg_top"] = np.where(df["bear_fvg"], df["Low"].shift(2),  np.nan)
 df["sfvg_bot"] = np.where(df["bear_fvg"], df["High"],          np.nan)
@@ -177,12 +228,18 @@ prev_in_ses = False
 
 vals = df[["Open","High","Low","Close","atr","in_ses",
            "bull_fvg","bear_fvg",
-           "bfvg_top","bfvg_bot","sfvg_top","sfvg_bot"]].values
+           "bfvg_top","bfvg_bot","sfvg_top","sfvg_bot",
+           "bear_frac","bull_frac","bear_frac_lvl","bull_frac_lvl"]].values
 
 cols = {c: i for i, c in enumerate(
     ["Open","High","Low","Close","atr","in_ses",
      "bull_fvg","bear_fvg",
-     "bfvg_top","bfvg_bot","sfvg_top","sfvg_bot"])}
+     "bfvg_top","bfvg_bot","sfvg_top","sfvg_bot",
+     "bear_frac","bull_frac","bear_frac_lvl","bull_frac_lvl"])}
+
+# Rolling fractal history for nearest-fractal search
+bear_frac_hist = []   # list of (level,) for bear fractals seen so far
+bull_frac_hist = []
 
 for i, row in enumerate(vals):
     O, H, L, C = row[cols["Open"]], row[cols["High"]], row[cols["Low"]], row[cols["Close"]]
@@ -190,6 +247,16 @@ for i, row in enumerate(vals):
     in_s    = bool(row[cols["in_ses"]])
     b_fvg   = bool(row[cols["bull_fvg"]])
     s_fvg   = bool(row[cols["bear_fvg"]])
+
+    # Update fractal history (fractals confirmed 2 bars ago, now safe to use)
+    if bool(row[cols["bear_frac"]]):
+        bear_frac_hist.append(row[cols["bear_frac_lvl"]])
+        if len(bear_frac_hist) > 50:
+            bear_frac_hist.pop(0)
+    if bool(row[cols["bull_frac"]]):
+        bull_frac_hist.append(row[cols["bull_frac_lvl"]])
+        if len(bull_frac_hist) > 50:
+            bull_frac_hist.pop(0)
 
     ses_end = prev_in_ses and not in_s
     prev_in_ses = in_s
@@ -255,6 +322,7 @@ for i, row in enumerate(vals):
                 "size":        pos["size"],
                 "pnl":         net_pnl,
                 "reason":      exit_reason,
+                "tp_src":      pos.get("tp_src", "RR"),
                 "equity":      equity,
             })
             pos["side"] = None
@@ -262,13 +330,40 @@ for i, row in enumerate(vals):
     # ── Enter new trades (only if flat and in session)
     if pos["side"] is None and in_s:
 
+        # ── helpers to find nearest fractal TP ──────────────────
+        def nearest_frac_above(entry, risk, hist):
+            # Prefer fractal closest to RR_FALLBACK target; must be >= MIN_FRAC_RR
+            best, best_dist = None, None
+            for lvl in hist:
+                if lvl > entry:
+                    rr   = (lvl - entry) / risk
+                    if rr >= MIN_FRAC_RR:
+                        dist = abs(rr - RR_FALLBACK)   # how close to target RR
+                        if best_dist is None or dist < best_dist:
+                            best, best_dist = lvl, dist
+            return best
+
+        def nearest_frac_below(entry, risk, hist):
+            best, best_dist = None, None
+            for lvl in hist:
+                if lvl < entry:
+                    rr   = (entry - lvl) / risk
+                    if rr >= MIN_FRAC_RR:
+                        dist = abs(rr - RR_FALLBACK)
+                        if best_dist is None or dist < best_dist:
+                            best, best_dist = lvl, dist
+            return best
+
         # LONG: price retraces into bullish FVG
         if (bz["active"] and i > bz["formed_i"] and
                 L <= bz["top"] and H >= bz["bot"]):
             entry_px = bz["bot"] + (bz["top"] - bz["bot"]) * (1.0 - FVG_ENTRY_PCT)
             sl_px    = bz["bot"] - SL_BUFFER * atr_v
             risk     = max(entry_px - sl_px, atr_v * 0.01)
-            tp_px    = entry_px + risk * RR
+
+            frac_tp  = nearest_frac_above(entry_px, risk, bear_frac_hist)
+            tp_px    = frac_tp if frac_tp is not None else entry_px + risk * RR_FALLBACK
+
             risk_amt = equity * RISK_PER_TRADE
             size     = risk_amt / risk if risk > 0 else 0
             comm     = entry_px * size * COMMISSION_PCT
@@ -277,7 +372,8 @@ for i, row in enumerate(vals):
                 equity -= comm
                 pos = {"side": "long", "entry": entry_px, "sl": sl_px,
                        "tp": tp_px, "size": size, "formed_i": i,
-                       "entry_time": df.index[i]}
+                       "entry_time": df.index[i],
+                       "tp_src": "FRAC" if frac_tp else "RR"}
             bz["active"] = False
 
         # SHORT: price retraces into bearish FVG
@@ -286,7 +382,10 @@ for i, row in enumerate(vals):
             entry_px = sz["top"] - (sz["top"] - sz["bot"]) * (1.0 - FVG_ENTRY_PCT)
             sl_px    = sz["top"] + SL_BUFFER * atr_v
             risk     = max(sl_px - entry_px, atr_v * 0.01)
-            tp_px    = entry_px - risk * RR
+
+            frac_tp  = nearest_frac_below(entry_px, risk, bull_frac_hist)
+            tp_px    = frac_tp if frac_tp is not None else entry_px - risk * RR_FALLBACK
+
             risk_amt = equity * RISK_PER_TRADE
             size     = risk_amt / risk if risk > 0 else 0
             comm     = entry_px * size * COMMISSION_PCT
@@ -295,7 +394,8 @@ for i, row in enumerate(vals):
                 equity -= comm
                 pos = {"side": "short", "entry": entry_px, "sl": sl_px,
                        "tp": tp_px, "size": size, "formed_i": i,
-                       "entry_time": df.index[i]}
+                       "entry_time": df.index[i],
+                       "tp_src": "FRAC" if frac_tp else "RR"}
             sz["active"] = False
 
 # ──────────────────────────────────────────────
@@ -345,15 +445,27 @@ else:
         print(f"    {r:12s}: {c}")
     print("═"*52)
 
+    # ── TP source breakdown
+    frac_trades = tdf[tdf["tp_src"] == "FRAC"]
+    rr_trades   = tdf[tdf["tp_src"] == "RR"]
+    print(f"\n  TP Source Breakdown:")
+    if len(frac_trades):
+        fw = (frac_trades["pnl"] > 0).sum()
+        print(f"    Fractal TP : {len(frac_trades)} trades  WR {fw/len(frac_trades)*100:.0f}%  PnL ${frac_trades['pnl'].sum():+.2f}")
+    if len(rr_trades):
+        rw = (rr_trades["pnl"] > 0).sum()
+        print(f"    Fallback RR: {len(rr_trades)} trades  WR {rw/len(rr_trades)*100:.0f}%  PnL ${rr_trades['pnl'].sum():+.2f}")
+
     # ── Per-session breakdown
     tdf["session"] = tdf["entry_time"].apply(
         lambda t: "London" if 2 <= t.hour < 5 else ("NY" if 8 <= t.hour < 11 else "Other"))
+    print(f"\n  Session Breakdown:")
     for sess in ["London", "NY"]:
         s = tdf[tdf["session"] == sess]
         if s.empty:
             continue
         sw = (s["pnl"] > 0).sum()
-        print(f"  {sess:8s} → {len(s)} trades  WR {sw/len(s)*100:.0f}%  PnL ${s['pnl'].sum():+.2f}")
+        print(f"    {sess:8s} → {len(s)} trades  WR {sw/len(s)*100:.0f}%  PnL ${s['pnl'].sum():+.2f}")
     print()
 
     # ──────────────────────────────────────────────
@@ -442,7 +554,7 @@ else:
              bbox=dict(boxstyle="round,pad=0.4", fc="#21262d", ec=col_grid))
 
     fig.suptitle(
-        f"Golden Hour FVG Strategy  ·  {SYMBOL}  {INTERVAL}  ·  RR={RR}  CAT={CATALYST_MULT}×ATR",
+        f"Golden Hour FVG + Fractal TP v2  ·  {SYMBOL}  {INTERVAL}  ·  Fallback RR={RR_FALLBACK}  CAT={CATALYST_MULT}×ATR",
         color=col_text, fontsize=12, y=1.01)
 
     out = "/home/user/claude-workspace/trading/backtest_result.png"
