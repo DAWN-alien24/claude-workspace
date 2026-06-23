@@ -192,10 +192,8 @@ flat      = strategy.position_size == 0
 tradeable = flat and in_ses
 
 // ── LONG ──
-long_cond = tradeable and bz_on and
-            bar_index > bz_bar and
-            low  <= bz_top and
-            high >= bz_bot
+long_in_zone = low <= bz_top and high >= bz_bot
+long_cond    = tradeable and bz_on and bar_index > bz_bar and long_in_zone
 
 if long_cond
     entry_px = bz_bot + (bz_top - bz_bot) * (1.0 - i_fvg_pct)
@@ -229,10 +227,8 @@ if long_cond
              size      = size.small)
 
 // ── SHORT ──
-short_cond = tradeable and sz_on and
-             bar_index > sz_bar and
-             high >= sz_bot and
-             low  <= sz_top
+short_in_zone = high >= sz_bot and low <= sz_top
+short_cond    = tradeable and sz_on and bar_index > sz_bar and short_in_zone
 
 if short_cond
     entry_px = sz_top - (sz_top - sz_bot) * (1.0 - i_fvg_pct)
