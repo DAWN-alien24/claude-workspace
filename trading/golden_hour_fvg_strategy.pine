@@ -1,80 +1,69 @@
-//@version=5
+//@version=6
 strategy(
-     title            = "Golden Hour – ICT FVG + Fractal TP v2 (Chanelle Style)",
-     overlay          = true,
-     default_qty_type = strategy.percent_of_equity,
+     title             = "Golden Hour – ICT FVG + Fractal TP v3 (Chanelle Style)",
+     overlay           = true,
+     default_qty_type  = strategy.percent_of_equity,
      default_qty_value = 5,
-     commission_type  = strategy.commission.percent,
-     commission_value = 0.02,
-     slippage         = 2,
-     max_boxes_count  = 500,
-     max_labels_count = 500,
-     max_lines_count  = 200)
+     commission_type   = strategy.commission.percent,
+     commission_value  = 0.02,
+     slippage          = 2,
+     max_boxes_count   = 500,
+     max_labels_count  = 500,
+     max_lines_count   = 500)
 
 // ══════════════════════════════════════════════════════════════
 //  INPUTS
 // ══════════════════════════════════════════════════════════════
-var G1 = "─── Sessions (New York Time) ───"
-i_lon = input.bool(true, "London Open  02:00 – 05:00 ET", group=G1)
-i_ny  = input.bool(true, "NY Open      08:00 – 11:00 ET", group=G1)
+var string G1 = "Sessions (New York Time)"
+bool i_lon = input.bool(true, "London Open  02:00–05:00 ET", group=G1)
+bool i_ny  = input.bool(true, "NY Open      08:00–11:00 ET", group=G1)
 
-var G2 = "─── Catalyst Candle / FVG ───"
-i_atr_len  = input.int  (14,  "ATR Length",                              group=G2, minval=1)
-i_cat_mult = input.float(1.5, "Catalyst Candle Min Size (× ATR)",        group=G2, minval=0.5, step=0.1)
-i_fvg_pct  = input.float(0.5, "FVG Entry Level  (0 = top · 1 = bottom)", group=G2, minval=0.0, maxval=1.0, step=0.05)
+var string G2 = "Catalyst / FVG"
+int   i_atr_len  = input.int  (14,  "ATR Length",                      group=G2, minval=1)
+float i_cat_mult = input.float(1.5, "Catalyst Size (× ATR)",            group=G2, minval=0.5, step=0.1)
+float i_fvg_pct  = input.float(0.5, "FVG Entry %  (0=top · 1=bottom)", group=G2, minval=0.0, maxval=1.0, step=0.05)
 
-var G3 = "─── Risk Management ───"
-i_rr_fallback = input.float(0.49, "Fallback R:R (used when no fractal found)", group=G3, minval=0.1, step=0.05)
-i_sl_buf      = input.float(0.3,  "Stop-Loss Buffer (× ATR)",                  group=G3, minval=0.0, step=0.05)
-i_min_rr      = input.float(0.2,  "Min R:R to accept fractal TP",              group=G3, minval=0.05, step=0.05,
-                             tooltip="Skip fractal TPs that give less than this R:R (too close to entry)")
+var string G3 = "Risk Management"
+float i_rr_fb  = input.float(0.49, "Fallback R:R (no fractal found)", group=G3, minval=0.1, step=0.05)
+float i_sl_buf = input.float(0.3,  "SL Buffer (× ATR)",               group=G3, minval=0.0, step=0.05)
+float i_min_rr = input.float(0.2,  "Min R:R to accept fractal TP",    group=G3, minval=0.05, step=0.05)
 
-var G4 = "─── Fractal Settings ───"
-i_frac_arms = input.int(2,  "Fractal Arms (2 = 5-bar fractal)",  group=G4, minval=1, maxval=5,
-                         tooltip="A 5-bar fractal (arms=2): high[2] must be highest of 5 consecutive bars")
-i_frac_lb   = input.int(60, "Fractal Search Lookback (bars)",    group=G4, minval=10, maxval=300)
+var string G4 = "Fractal"
+int i_frac_n = input.int(2, "Fractal Arms  (2 = 5-bar)", group=G4, minval=1, maxval=5)
 
-var G5 = "─── Display ───"
-i_show_boxes    = input.bool(true,  "Show FVG Boxes",         group=G5)
-i_show_labels   = input.bool(true,  "Show Entry Labels",      group=G5)
-i_show_fractals = input.bool(true,  "Show Fractal Markers",   group=G5)
-i_show_tp_line  = input.bool(true,  "Show TP / SL Lines",     group=G5)
+var string G5 = "Display"
+bool i_show_fvg  = input.bool(true, "Show FVG Zones",    group=G5)
+bool i_show_frac = input.bool(true, "Show Fractals",      group=G5)
+bool i_show_lbl  = input.bool(true, "Show Entry Labels",  group=G5)
+bool i_show_tp   = input.bool(true, "Show TP / SL Lines", group=G5)
 
 // ══════════════════════════════════════════════════════════════
-//  SESSION WINDOWS  (Eastern Time)
+//  SESSIONS
 // ══════════════════════════════════════════════════════════════
-in_lon  = i_lon and not na(time(timeframe.period, "0200-0500", "America/New_York"))
-in_ny   = i_ny  and not na(time(timeframe.period, "0800-1100", "America/New_York"))
-in_ses  = in_lon or in_ny
-ses_end = in_ses[1] and not in_ses
+bool in_lon  = i_lon and not na(time(timeframe.period, "0200-0500", "America/New_York"))
+bool in_ny   = i_ny  and not na(time(timeframe.period, "0800-1100", "America/New_York"))
+bool in_ses  = in_lon or in_ny
+bool ses_end = in_ses[1] and not in_ses
 
 // ══════════════════════════════════════════════════════════════
-//  ATR  +  CATALYST CANDLE
+//  ATR + CATALYST CANDLE
 // ══════════════════════════════════════════════════════════════
-atr  = ta.atr(i_atr_len)
-body = math.abs(close - open)
+float atr  = ta.atr(i_atr_len)
+float body = math.abs(close - open)
 
-bull_cat = close > open and body > i_cat_mult * atr
-bear_cat = close < open and body > i_cat_mult * atr
+bool bull_cat = close > open and body > i_cat_mult * atr
+bool bear_cat = close < open and body > i_cat_mult * atr
 
 // ══════════════════════════════════════════════════════════════
-//  BILL WILLIAMS FRACTAL DETECTION
-//
-//  Bear fractal (local HIGH, becomes TP for LONG trades):
-//    high[arms] is strictly greater than all bars within ±arms
-//
-//  Bull fractal (local LOW, becomes TP for SHORT trades):
-//    low[arms] is strictly less than all bars within ±arms
-//
-//  Default arms=2 gives classic 5-bar fractal:
-//    high[-2] > high[-1] > ... < high[+1] < high[+2]
+//  BILL WILLIAMS FRACTAL  (5-bar default, arms=2)
+//  Bear fractal → local HIGH → TP target for LONG trades
+//  Bull fractal → local LOW  → TP target for SHORT trades
 // ══════════════════════════════════════════════════════════════
-N = i_frac_arms
+int N = i_frac_n
 
-bear_frac_ok = high[N] > high[N-1] and high[N] > high[N+1]
-bull_frac_ok = low[N]  < low[N-1]  and low[N]  < low[N+1]
+bool bear_frac_ok = high[N] > high[N-1] and high[N] > high[N+1]
+bool bull_frac_ok = low[N]  < low[N-1]  and low[N]  < low[N+1]
 
-// Extend check for arms > 1
 if N >= 2
     bear_frac_ok := bear_frac_ok and high[N] > high[N-2] and high[N] > high[N+2]
     bull_frac_ok := bull_frac_ok and low[N]  < low[N-2]  and low[N]  < low[N+2]
@@ -88,95 +77,116 @@ if N >= 5
     bear_frac_ok := bear_frac_ok and high[N] > high[N-5] and high[N] > high[N+5]
     bull_frac_ok := bull_frac_ok and low[N]  < low[N-5]  and low[N]  < low[N+5]
 
-bear_fractal = bear_frac_ok   // confirmed bear fractal at bar[N]
-bull_fractal = bull_frac_ok   // confirmed bull fractal at bar[N]
+bool bear_fractal = bear_frac_ok
+bool bull_fractal = bull_frac_ok
 
-// ══════════════════════════════════════════════════════════════
-//  FRACTAL MEMORY  –  store recent fractal levels in arrays
-//  so we can search for the nearest one at entry time.
-// ══════════════════════════════════════════════════════════════
-var float[] bear_frac_levels = array.new_float(0)  // recent bear-fractal highs
-var float[] bull_frac_levels = array.new_float(0)  // recent bull-fractal lows
-var int     MAX_FRAC = 30                           // keep last 30 fractals
+// Rolling arrays store last 30 confirmed fractal levels
+var array<float> bear_fracs = array.new<float>()
+var array<float> bull_fracs = array.new<float>()
 
 if bear_fractal
-    array.push(bear_frac_levels, high[N])
-    if array.size(bear_frac_levels) > MAX_FRAC
-        array.shift(bear_frac_levels)
+    bear_fracs.push(high[N])
+    if bear_fracs.size() > 30
+        bear_fracs.shift()
 
 if bull_fractal
-    array.push(bull_frac_levels, low[N])
-    if array.size(bull_frac_levels) > MAX_FRAC
-        array.shift(bull_frac_levels)
+    bull_fracs.push(low[N])
+    if bull_fracs.size() > 30
+        bull_fracs.shift()
 
-// ──────────────────────────────────────────────────────────────
-//  nearest_fractal_above(entry):  find closest fractal HIGH > entry
-//  nearest_fractal_below(entry):  find closest fractal LOW  < entry
-// ──────────────────────────────────────────────────────────────
-nearest_fractal_above(entry_px, risk) =>
-    best     = float(na)
-    best_rr  = float(na)
-    sz       = array.size(bear_frac_levels)
-    for i = sz - 1 to 0
-        lvl = array.get(bear_frac_levels, i)
-        rr  = (lvl - entry_px) / risk
-        if lvl > entry_px and rr >= i_min_rr
-            if na(best_rr) or rr < best_rr   // prefer closer (smaller rr = nearer)
-                best    := lvl
-                best_rr := rr
-    best
-
-nearest_fractal_below(entry_px, risk) =>
-    best     = float(na)
-    best_rr  = float(na)
-    sz       = array.size(bull_frac_levels)
-    for i = sz - 1 to 0
-        lvl = array.get(bull_frac_levels, i)
-        rr  = (entry_px - lvl) / risk
-        if lvl < entry_px and rr >= i_min_rr
+// Search for nearest fractal above/below entry that gives >= i_min_rr
+find_tp_above(float entry, float risk) =>
+    float result  = na
+    float best_rr = na
+    for lvl in bear_fracs
+        float rr = (lvl - entry) / risk
+        if lvl > entry and rr >= i_min_rr
             if na(best_rr) or rr < best_rr
-                best    := lvl
+                result  := lvl
                 best_rr := rr
-    best
+    result
+
+find_tp_below(float entry, float risk) =>
+    float result  = na
+    float best_rr = na
+    for lvl in bull_fracs
+        float rr = (entry - lvl) / risk
+        if lvl < entry and rr >= i_min_rr
+            if na(best_rr) or rr < best_rr
+                result  := lvl
+                best_rr := rr
+    result
 
 // ══════════════════════════════════════════════════════════════
-//  FVG DETECTION
-//  Bullish FVG : low[0] > high[2]  AND catalyst = bar[1]
-//  Bearish FVG : high[0] < low[2]  AND catalyst = bar[1]
+//  FVG DETECTION  (3-candle ICT structure)
+//  Bullish : low[0] > high[2]  AND  bull catalyst at bar[1]
+//  Bearish : high[0] < low[2]  AND  bear catalyst at bar[1]
 // ══════════════════════════════════════════════════════════════
-bull_fvg = low  > high[2] and bull_cat[1] and in_ses[1]
-bear_fvg = high < low[2]  and bear_cat[1] and in_ses[1]
-
-bull_fvg_top = low
-bull_fvg_bot = high[2]
-bear_fvg_top = low[2]
-bear_fvg_bot = high
+bool bull_fvg = low  > high[2] and bull_cat[1] and in_ses[1]
+bool bear_fvg = high < low[2]  and bear_cat[1] and in_ses[1]
 
 // ══════════════════════════════════════════════════════════════
-//  ZONE STATE MACHINE
+//  ZONE STATE + DYNAMIC BOX DRAWING
+//  Boxes are stored as var references and their right edge
+//  is updated every bar via box.set_right() so they follow
+//  the chart as new K-bars arrive.
 // ══════════════════════════════════════════════════════════════
 var float bz_top = na
 var float bz_bot = na
 var bool  bz_on  = false
 var int   bz_bar = na
+var box   bz_box = na   // live reference → right edge updated each bar
 
 var float sz_top = na
 var float sz_bot = na
 var bool  sz_on  = false
 var int   sz_bar = na
+var box   sz_box = na
 
+// TP / SL line references (extend.right → always reaches chart edge)
+var line tp_ln = na
+var line sl_ln = na
+
+// ── Register new FVG
 if bull_fvg
-    bz_top := bull_fvg_top
-    bz_bot := bull_fvg_bot
+    bz_top := low
+    bz_bot := high[2]
     bz_on  := true
     bz_bar := bar_index
+    if i_show_fvg
+        if not na(bz_box)
+            box.delete(bz_box)
+        bz_box := box.new(bar_index - 2, bz_top, bar_index, bz_bot,
+             border_color = color.new(color.lime, 20),
+             bgcolor      = color.new(color.lime, 82),
+             border_width = 1,
+             text         = "↑ Bull FVG",
+             text_size    = size.tiny,
+             text_color   = color.lime)
 
 if bear_fvg
-    sz_top := bear_fvg_top
-    sz_bot := bear_fvg_bot
+    sz_top := low[2]
+    sz_bot := high
     sz_on  := true
     sz_bar := bar_index
+    if i_show_fvg
+        if not na(sz_box)
+            box.delete(sz_box)
+        sz_box := box.new(bar_index - 2, sz_top, bar_index, sz_bot,
+             border_color = color.new(color.red, 20),
+             bgcolor      = color.new(color.red, 82),
+             border_width = 1,
+             text         = "↓ Bear FVG",
+             text_size    = size.tiny,
+             text_color   = color.red)
 
+// ── Extend active FVG boxes to current bar every tick
+if bz_on and not na(bz_box)
+    box.set_right(bz_box, bar_index)
+if sz_on and not na(sz_box)
+    box.set_right(sz_box, bar_index)
+
+// ── Zone invalidation (BOS: price closes beyond far edge)
 if bz_on and close < bz_bot - i_sl_buf * atr
     bz_on := false
 if sz_on and close > sz_top + i_sl_buf * atr
@@ -188,158 +198,171 @@ if ses_end
 // ══════════════════════════════════════════════════════════════
 //  ENTRIES
 // ══════════════════════════════════════════════════════════════
-flat      = strategy.position_size == 0
-tradeable = flat and in_ses
+bool flat      = strategy.position_size == 0
+bool tradeable = flat and in_ses
 
-// ── LONG ──
-long_in_zone = low <= bz_top and high >= bz_bot
-long_cond    = tradeable and bz_on and bar_index > bz_bar and long_in_zone
+// ── LONG: retracement into bullish FVG
+bool long_in_zone = low <= bz_top and high >= bz_bot
+bool long_cond    = tradeable and bz_on and bar_index > bz_bar and long_in_zone
 
 if long_cond
-    entry_px = bz_bot + (bz_top - bz_bot) * (1.0 - i_fvg_pct)
-    sl_px    = bz_bot - i_sl_buf * atr
-    risk     = math.max(entry_px - sl_px, syminfo.mintick * 5)
-
-    // Fractal TP: nearest bear-fractal HIGH above entry
-    // Fallback: fixed 0.49 × risk
-    frac_tp  = nearest_fractal_above(entry_px, risk)
-    use_frac = not na(frac_tp)
-    tp_px    = use_frac ? frac_tp : entry_px + risk * i_rr_fallback
-    achieved = (tp_px - entry_px) / risk
+    float entry_px = bz_bot + (bz_top - bz_bot) * (1.0 - i_fvg_pct)
+    float sl_px    = bz_bot - i_sl_buf * atr
+    float risk     = math.max(entry_px - sl_px, syminfo.mintick * 5)
+    float frac_tp  = find_tp_above(entry_px, risk)
+    bool  use_frac = not na(frac_tp)
+    float tp_px    = use_frac ? frac_tp : entry_px + risk * i_rr_fb
+    float achieved = (tp_px - entry_px) / risk
 
     strategy.entry("Long", strategy.long)
     strategy.exit("L-Exit", from_entry="Long", stop=sl_px, limit=tp_px)
     bz_on := false
 
-    if i_show_tp_line
-        line.new(bar_index, tp_px, bar_index + 20, tp_px,
-             color=color.new(color.lime, 30), style=line.style_dashed, width=1)
-        line.new(bar_index, sl_px, bar_index + 20, sl_px,
-             color=color.new(color.red, 30),  style=line.style_dashed, width=1)
+    if i_show_tp
+        if not na(tp_ln)
+            line.delete(tp_ln)
+        if not na(sl_ln)
+            line.delete(sl_ln)
+        tp_ln := line.new(bar_index, tp_px, bar_index + 1, tp_px,
+             extend    = extend.right,
+             color     = color.new(color.lime, 20),
+             style     = line.style_dashed,
+             width     = 1)
+        sl_ln := line.new(bar_index, sl_px, bar_index + 1, sl_px,
+             extend    = extend.right,
+             color     = color.new(color.red, 20),
+             style     = line.style_dashed,
+             width     = 1)
 
-    if i_show_labels
-        src_txt = use_frac ? "FRAC" : "RR"
+    if i_show_lbl
+        string src = use_frac ? "FRAC" : "RR"
         label.new(bar_index, low,
-             text      = "↑ L  " + src_txt + "\n" + str.tostring(achieved, "#.##") + "R",
+             text      = "↑ L  " + src + "\n" + str.tostring(achieved, "#.##") + "R",
              style     = label.style_label_up,
-             color     = use_frac ? color.new(color.lime, 0) : color.new(color.teal, 0),
+             color     = use_frac ? color.lime : color.teal,
              textcolor = color.black,
              size      = size.small)
 
-// ── SHORT ──
-short_in_zone = high >= sz_bot and low <= sz_top
-short_cond    = tradeable and sz_on and bar_index > sz_bar and short_in_zone
+// ── SHORT: retracement into bearish FVG
+bool short_in_zone = high >= sz_bot and low <= sz_top
+bool short_cond    = tradeable and sz_on and bar_index > sz_bar and short_in_zone
 
 if short_cond
-    entry_px = sz_top - (sz_top - sz_bot) * (1.0 - i_fvg_pct)
-    sl_px    = sz_top + i_sl_buf * atr
-    risk     = math.max(sl_px - entry_px, syminfo.mintick * 5)
-
-    frac_tp  = nearest_fractal_below(entry_px, risk)
-    use_frac = not na(frac_tp)
-    tp_px    = use_frac ? frac_tp : entry_px - risk * i_rr_fallback
-    achieved = (entry_px - tp_px) / risk
+    float entry_px = sz_top - (sz_top - sz_bot) * (1.0 - i_fvg_pct)
+    float sl_px    = sz_top + i_sl_buf * atr
+    float risk     = math.max(sl_px - entry_px, syminfo.mintick * 5)
+    float frac_tp  = find_tp_below(entry_px, risk)
+    bool  use_frac = not na(frac_tp)
+    float tp_px    = use_frac ? frac_tp : entry_px - risk * i_rr_fb
+    float achieved = (entry_px - tp_px) / risk
 
     strategy.entry("Short", strategy.short)
     strategy.exit("S-Exit", from_entry="Short", stop=sl_px, limit=tp_px)
     sz_on := false
 
-    if i_show_tp_line
-        line.new(bar_index, tp_px, bar_index + 20, tp_px,
-             color=color.new(color.lime, 30), style=line.style_dashed, width=1)
-        line.new(bar_index, sl_px, bar_index + 20, sl_px,
-             color=color.new(color.red, 30),  style=line.style_dashed, width=1)
+    if i_show_tp
+        if not na(tp_ln)
+            line.delete(tp_ln)
+        if not na(sl_ln)
+            line.delete(sl_ln)
+        tp_ln := line.new(bar_index, tp_px, bar_index + 1, tp_px,
+             extend    = extend.right,
+             color     = color.new(color.lime, 20),
+             style     = line.style_dashed,
+             width     = 1)
+        sl_ln := line.new(bar_index, sl_px, bar_index + 1, sl_px,
+             extend    = extend.right,
+             color     = color.new(color.red, 20),
+             style     = line.style_dashed,
+             width     = 1)
 
-    if i_show_labels
-        src_txt = use_frac ? "FRAC" : "RR"
+    if i_show_lbl
+        string src = use_frac ? "FRAC" : "RR"
         label.new(bar_index, high,
-             text      = "↓ S  " + src_txt + "\n" + str.tostring(achieved, "#.##") + "R",
+             text      = "↓ S  " + src + "\n" + str.tostring(achieved, "#.##") + "R",
              style     = label.style_label_down,
-             color     = use_frac ? color.new(color.red, 0) : color.new(color.maroon, 0),
+             color     = use_frac ? color.red : color.maroon,
              textcolor = color.white,
              size      = size.small)
 
-// ── SESSION-END FORCE EXIT ──
+// ── Delete TP/SL lines once trade is closed
+bool just_closed = strategy.position_size == 0 and strategy.position_size[1] != 0
+if just_closed
+    if not na(tp_ln)
+        line.delete(tp_ln)
+        tp_ln := na
+    if not na(sl_ln)
+        line.delete(sl_ln)
+        sl_ln := na
+
+// ── Session-end force exit
 if ses_end and not flat
     strategy.close_all(comment="EOD")
 
 // ══════════════════════════════════════════════════════════════
 //  VISUALS
 // ══════════════════════════════════════════════════════════════
-
-// Session shading
 bgcolor(in_lon ? color.new(color.blue,   92) : na, title="London Window")
 bgcolor(in_ny  ? color.new(color.orange, 92) : na, title="NY Window")
 
-// Catalyst bars
 barcolor(bull_cat and in_ses ? color.new(color.lime, 0) : na, title="Bull Catalyst")
 barcolor(bear_cat and in_ses ? color.new(color.red,  0) : na, title="Bear Catalyst")
 
-// FVG zone boxes
-if i_show_boxes
-    if bull_fvg
-        box.new(bar_index - 2, bull_fvg_top, bar_index + 40, bull_fvg_bot,
-             border_color=color.new(color.lime, 30), bgcolor=color.new(color.lime, 82),
-             border_width=1, text="↑ Bull FVG", text_size=size.tiny, text_color=color.lime)
-    if bear_fvg
-        box.new(bar_index - 2, bear_fvg_top, bar_index + 40, bear_fvg_bot,
-             border_color=color.new(color.red, 30), bgcolor=color.new(color.red, 82),
-             border_width=1, text="↓ Bear FVG", text_size=size.tiny, text_color=color.red)
-
-// Fractal markers (plotted at the fractal bar, N bars ago)
-if i_show_fractals
+// Fractal markers at the confirmed fractal bar (N bars ago)
+if i_show_frac
     if bear_fractal
         label.new(bar_index - N, high[N], "▼",
-             style=label.style_none,
-             textcolor=color.new(color.orange, 10),
-             size=size.tiny,
-             tooltip="Bear Fractal – potential TP for LONG")
+             style     = label.style_none,
+             textcolor = color.orange,
+             size      = size.small,
+             tooltip   = "Bear Fractal – TP for LONG")
     if bull_fractal
         label.new(bar_index - N, low[N], "▲",
-             style=label.style_none,
-             textcolor=color.new(color.aqua, 10),
-             size=size.tiny,
-             tooltip="Bull Fractal – potential TP for SHORT")
+             style     = label.style_none,
+             textcolor = color.aqua,
+             size      = size.small,
+             tooltip   = "Bull Fractal – TP for SHORT")
 
 // ══════════════════════════════════════════════════════════════
-//  INFO TABLE
+//  INFO TABLE  (top-right)
 // ══════════════════════════════════════════════════════════════
-var table info = table.new(position.top_right, 2, 7,
-     bgcolor=color.new(color.black, 70), border_color=color.new(color.gray, 50),
-     border_width=1, frame_color=color.new(color.gray, 50), frame_width=1)
+var table tbl = table.new(position.top_right, 2, 7,
+     bgcolor      = color.new(color.black, 70),
+     border_color = color.new(color.gray, 50),
+     border_width = 1,
+     frame_color  = color.new(color.gray, 50),
+     frame_width  = 1)
 
 if barstate.islastconfirmedhistory or barstate.islast
-    wins  = strategy.wintrades
-    total = strategy.closedtrades
-    wr    = total > 0 ? wins / total * 100 : 0.0
-    gp    = strategy.grossprofit
-    gl    = strategy.grossloss
-    pf    = gl > 0 ? gp / gl : 0.0
+    int   total = strategy.closedtrades
+    float wr    = total > 0 ? strategy.wintrades / total * 100 : 0.0
+    float pf    = strategy.grossloss > 0 ? strategy.grossprofit / strategy.grossloss : 0.0
 
-    table.cell(info, 0, 0, "GH FVG + FRACTAL TP  v2",
+    table.cell(tbl, 0, 0, "GH FVG + FRACTAL TP  v3",
          text_color=color.white, text_size=size.small, bgcolor=color.new(color.navy, 60))
-    table.cell(info, 1, 0, "0.49 RR",
+    table.cell(tbl, 1, 0, "0.49 RR",
          text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 60))
-
-    table.cell(info, 0, 1, "Win Rate",      text_color=color.silver, text_size=size.tiny)
-    table.cell(info, 1, 1, str.tostring(wr, "#.1") + "%",
+    table.cell(tbl, 0, 1, "Win Rate",
+         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 1, str.tostring(wr, "#.1") + "%",
          text_color=wr >= 65 ? color.lime : color.red, text_size=size.tiny)
-
-    table.cell(info, 0, 2, "Profit Factor", text_color=color.silver, text_size=size.tiny)
-    table.cell(info, 1, 2, str.tostring(pf, "#.##"),
+    table.cell(tbl, 0, 2, "Profit Factor",
+         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 2, str.tostring(pf, "#.##"),
          text_color=pf >= 1.0 ? color.lime : color.red, text_size=size.tiny)
-
-    table.cell(info, 0, 3, "Total Trades",  text_color=color.silver, text_size=size.tiny)
-    table.cell(info, 1, 3, str.tostring(total), text_color=color.white, text_size=size.tiny)
-
-    table.cell(info, 0, 4, "Net P&L",       text_color=color.silver, text_size=size.tiny)
-    table.cell(info, 1, 4, str.tostring(strategy.netprofit, "#.##"),
+    table.cell(tbl, 0, 3, "Total Trades",
+         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 3, str.tostring(total),
+         text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 0, 4, "Net P&L",
+         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 4, str.tostring(strategy.netprofit, "#.##"),
          text_color=strategy.netprofit >= 0 ? color.lime : color.red, text_size=size.tiny)
-
-    table.cell(info, 0, 5, "Max Drawdown",  text_color=color.silver, text_size=size.tiny)
-    table.cell(info, 1, 5, str.tostring(strategy.max_drawdown, "#.##"),
+    table.cell(tbl, 0, 5, "Max Drawdown",
+         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 5, str.tostring(strategy.max_drawdown, "#.##"),
          text_color=color.orange, text_size=size.tiny)
-
-    table.cell(info, 0, 6, "Final Equity",  text_color=color.silver, text_size=size.tiny)
-    table.cell(info, 1, 6, str.tostring(strategy.equity, "#.##"),
+    table.cell(tbl, 0, 6, "Final Equity",
+         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 6, str.tostring(strategy.equity, "#.##"),
          text_color=color.white, text_size=size.tiny)
