@@ -186,14 +186,26 @@ if bz_on and not na(bz_box)
 if sz_on and not na(sz_box)
     box.set_right(sz_box, bar_index)
 
-// ── Zone invalidation (BOS: price closes beyond far edge)
+// ── Zone invalidation (BOS: price closes beyond far edge) – also delete box
 if bz_on and close < bz_bot - i_sl_buf * atr
     bz_on := false
+    if not na(bz_box)
+        box.delete(bz_box)
+        bz_box := na
 if sz_on and close > sz_top + i_sl_buf * atr
     sz_on := false
+    if not na(sz_box)
+        box.delete(sz_box)
+        sz_box := na
 if ses_end
     bz_on := false
     sz_on := false
+    if not na(bz_box)
+        box.delete(bz_box)
+        bz_box := na
+    if not na(sz_box)
+        box.delete(sz_box)
+        sz_box := na
 
 // ══════════════════════════════════════════════════════════════
 //  ENTRIES
@@ -236,8 +248,9 @@ if long_cond
 
     if i_show_lbl
         string src = use_frac ? "FRAC" : "RR"
-        label.new(bar_index, low,
+        label.new(bar_index, na,
              text      = "↑ L  " + src + "\n" + str.tostring(achieved, "#.##") + "R",
+             yloc      = yloc.belowbar,
              style     = label.style_label_up,
              color     = use_frac ? color.lime : color.teal,
              textcolor = color.black,
@@ -278,8 +291,9 @@ if short_cond
 
     if i_show_lbl
         string src = use_frac ? "FRAC" : "RR"
-        label.new(bar_index, high,
+        label.new(bar_index, na,
              text      = "↓ S  " + src + "\n" + str.tostring(achieved, "#.##") + "R",
+             yloc      = yloc.abovebar,
              style     = label.style_label_down,
              color     = use_frac ? color.red : color.maroon,
              textcolor = color.white,
@@ -311,13 +325,15 @@ barcolor(bear_cat and in_ses ? color.new(color.red,  0) : na, title="Bear Cataly
 // Fractal markers at the confirmed fractal bar (N bars ago)
 if i_show_frac
     if bear_fractal
-        label.new(bar_index - N, high[N], "▼",
+        label.new(bar_index - N, na, "▼",
+             yloc      = yloc.abovebar,
              style     = label.style_none,
              textcolor = color.orange,
              size      = size.small,
              tooltip   = "Bear Fractal – TP for LONG")
     if bull_fractal
-        label.new(bar_index - N, low[N], "▲",
+        label.new(bar_index - N, na, "▲",
+             yloc      = yloc.belowbar,
              style     = label.style_none,
              textcolor = color.aqua,
              size      = size.small,
