@@ -1,16 +1,15 @@
 //@version=5
 strategy(
-     title                 = "Golden Hour – ICT FVG + Fractal TP v2 (Chanelle Style)",
-     overlay               = true,
-     default_qty_type      = strategy.percent_of_equity,
-     default_qty_value     = 5,
-     commission_type       = strategy.commission.percent,
-     commission_value      = 0.02,
-     slippage              = 2,
-     process_bars_on_close = true,
-     max_boxes_count       = 500,
-     max_labels_count      = 500,
-     max_lines_count       = 200)
+     title            = "Golden Hour – ICT FVG + Fractal TP v2 (Chanelle Style)",
+     overlay          = true,
+     default_qty_type = strategy.percent_of_equity,
+     default_qty_value = 5,
+     commission_type  = strategy.commission.percent,
+     commission_value = 0.02,
+     slippage         = 2,
+     max_boxes_count  = 500,
+     max_labels_count = 500,
+     max_lines_count  = 200)
 
 // ══════════════════════════════════════════════════════════════
 //  INPUTS
@@ -193,10 +192,10 @@ flat      = strategy.position_size == 0
 tradeable = flat and in_ses
 
 // ── LONG ──
-long_cond = tradeable and bz_on
-            and bar_index > bz_bar
-            and low  <= bz_top
-            and high >= bz_bot
+long_cond = tradeable and bz_on and
+            bar_index > bz_bar and
+            low  <= bz_top and
+            high >= bz_bot
 
 if long_cond
     entry_px = bz_bot + (bz_top - bz_bot) * (1.0 - i_fvg_pct)
@@ -230,10 +229,10 @@ if long_cond
              size      = size.small)
 
 // ── SHORT ──
-short_cond = tradeable and sz_on
-             and bar_index > sz_bar
-             and high >= sz_bot
-             and low  <= sz_top
+short_cond = tradeable and sz_on and
+             bar_index > sz_bar and
+             high >= sz_bot and
+             low  <= sz_top
 
 if short_cond
     entry_px = sz_top - (sz_top - sz_bot) * (1.0 - i_fvg_pct)
