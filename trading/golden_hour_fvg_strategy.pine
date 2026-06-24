@@ -299,21 +299,24 @@ plot(i_show_tp ? active_tp : na, "TP", color=color.new(color.lime, 20), linewidt
 plot(i_show_tp ? active_sl : na, "SL", color=color.new(color.red,  20), linewidth=1, style=plot.style_linebr)
 
 // Fractal markers at the confirmed fractal bar (N bars ago)
-if i_show_frac
-    if bear_fractal
-        label.new(bar_index - N, na, "▼",
-             yloc      = yloc.abovebar,
-             style     = label.style_none,
-             textcolor = color.orange,
-             size      = size.small,
-             tooltip   = "Bear Fractal – TP for LONG")
-    if bull_fractal
-        label.new(bar_index - N, na, "▲",
-             yloc      = yloc.belowbar,
-             style     = label.style_none,
-             textcolor = color.aqua,
-             size      = size.small,
-             tooltip   = "Bull Fractal – TP for SHORT")
+// Fractal markers: plotshape() binds directly to bar high/low and never
+// stretches the Y-axis, unlike label.new() with yloc.abovebar.
+// in_ses[N] restricts display to fractals that formed inside a session.
+plotshape(i_show_frac and bear_fractal and in_ses[N],
+     title    = "Bear Fractal",
+     style    = shape.triangledown,
+     location = location.abovebar,
+     color    = color.orange,
+     size     = size.tiny,
+     offset   = -N)
+
+plotshape(i_show_frac and bull_fractal and in_ses[N],
+     title    = "Bull Fractal",
+     style    = shape.triangleup,
+     location = location.belowbar,
+     color    = color.aqua,
+     size     = size.tiny,
+     offset   = -N)
 
 // ══════════════════════════════════════════════════════════════
 //  INFO TABLE  (top-right)
