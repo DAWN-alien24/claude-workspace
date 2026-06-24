@@ -143,9 +143,10 @@ var bool  sz_on  = false
 var int   sz_bar = na
 var box   sz_box = na
 
-// TP / SL line references (extend.right → always reaches chart edge)
-var line tp_ln = na
-var line sl_ln = na
+// Active trade TP/SL stored as price levels; rendered via plot() so they
+// never extend to far-off historical prices and don't distort the Y-axis.
+var float active_tp = na
+var float active_sl = na
 
 // ── Register new FVG
 if bull_fvg
@@ -206,6 +207,8 @@ if ses_end
     if not na(sz_box)
         box.delete(sz_box)
         sz_box := na
+    active_tp := na
+    active_sl := na
 
 // ══════════════════════════════════════════════════════════════
 //  ENTRIES
@@ -228,23 +231,9 @@ if long_cond
 
     strategy.entry("Long", strategy.long)
     strategy.exit("L-Exit", from_entry="Long", stop=sl_px, limit=tp_px)
-    bz_on := false
-
-    if i_show_tp
-        if not na(tp_ln)
-            line.delete(tp_ln)
-        if not na(sl_ln)
-            line.delete(sl_ln)
-        tp_ln := line.new(bar_index, tp_px, bar_index + 1, tp_px,
-             extend    = extend.right,
-             color     = color.new(color.lime, 20),
-             style     = line.style_dashed,
-             width     = 1)
-        sl_ln := line.new(bar_index, sl_px, bar_index + 1, sl_px,
-             extend    = extend.right,
-             color     = color.new(color.red, 20),
-             style     = line.style_dashed,
-             width     = 1)
+    bz_on     := false
+    active_tp := tp_px
+    active_sl := sl_px
 
     if i_show_lbl
         string src = use_frac ? "FRAC" : "RR"
@@ -271,23 +260,9 @@ if short_cond
 
     strategy.entry("Short", strategy.short)
     strategy.exit("S-Exit", from_entry="Short", stop=sl_px, limit=tp_px)
-    sz_on := false
-
-    if i_show_tp
-        if not na(tp_ln)
-            line.delete(tp_ln)
-        if not na(sl_ln)
-            line.delete(sl_ln)
-        tp_ln := line.new(bar_index, tp_px, bar_index + 1, tp_px,
-             extend    = extend.right,
-             color     = color.new(color.lime, 20),
-             style     = line.style_dashed,
-             width     = 1)
-        sl_ln := line.new(bar_index, sl_px, bar_index + 1, sl_px,
-             extend    = extend.right,
-             color     = color.new(color.red, 20),
-             style     = line.style_dashed,
-             width     = 1)
+    sz_on     := false
+    active_tp := tp_px
+    active_sl := sl_px
 
     if i_show_lbl
         string src = use_frac ? "FRAC" : "RR"
@@ -299,15 +274,11 @@ if short_cond
              textcolor = color.white,
              size      = size.small)
 
-// ── Delete TP/SL lines once trade is closed
+// ── Clear TP/SL levels once trade is closed
 bool just_closed = strategy.position_size == 0 and strategy.position_size[1] != 0
 if just_closed
-    if not na(tp_ln)
-        line.delete(tp_ln)
-        tp_ln := na
-    if not na(sl_ln)
-        line.delete(sl_ln)
-        sl_ln := na
+    active_tp := na
+    active_sl := na
 
 // ── Session-end force exit
 if ses_end and not flat
@@ -321,6 +292,11 @@ bgcolor(in_ny  ? color.new(color.orange, 92) : na, title="NY Window")
 
 barcolor(bull_cat and in_ses ? color.new(color.lime, 0) : na, title="Bull Catalyst")
 barcolor(bear_cat and in_ses ? color.new(color.red,  0) : na, title="Bear Catalyst")
+
+// TP / SL via plot() – only has a value while a trade is open, so it can
+// never pull the Y-axis to a stale historical price level.
+plot(i_show_tp ? active_tp : na, "TP", color=color.new(color.lime, 20), linewidth=1, style=plot.style_linebr)
+plot(i_show_tp ? active_sl : na, "SL", color=color.new(color.red,  20), linewidth=1, style=plot.style_linebr)
 
 // Fractal markers at the confirmed fractal bar (N bars ago)
 if i_show_frac
