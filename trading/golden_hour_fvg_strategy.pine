@@ -84,12 +84,15 @@ bool bull_fractal = bull_frac_ok
 var array<float> bear_fracs = array.new<float>()
 var array<float> bull_fracs = array.new<float>()
 
-if bear_fractal
+// Only push fractals whose centre bar was inside a session;
+// stale cross-session fractals would set active_tp far from current price
+// and stretch the Y-axis, making K-bars shrink to the chart bottom.
+if bear_fractal and in_ses[N]
     bear_fracs.push(high[N])
     if bear_fracs.size() > 30
         bear_fracs.shift()
 
-if bull_fractal
+if bull_fractal and in_ses[N]
     bull_fracs.push(low[N])
     if bull_fracs.size() > 30
         bull_fracs.shift()
@@ -201,6 +204,8 @@ if sz_on and close > sz_top + i_sl_buf * atr
         box.delete(sz_box)
         sz_box := na
 if ses_end
+    bear_fracs.clear()   // purge stale fractal levels so next session starts clean
+    bull_fracs.clear()
     bz_on := false
     sz_on := false
     if not na(bz_box)
