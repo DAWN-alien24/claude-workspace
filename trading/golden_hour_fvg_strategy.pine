@@ -143,10 +143,12 @@ var bool  sz_on  = false
 var int   sz_bar = na
 var box   sz_box = na
 
-// Active trade TP/SL stored as price levels; rendered via plot() so they
-// never extend to far-off historical prices and don't distort the Y-axis.
+// Active trade TP/SL stored as price levels; rendered via line.new() with
+// moving x1 so no historical bar holds an absolute price → zero Y-axis distortion.
 var float active_tp = na
 var float active_sl = na
+var line  tp_line   = na
+var line  sl_line   = na
 
 // ── Register new FVG
 if bull_fvg
@@ -209,6 +211,12 @@ if ses_end
         sz_box := na
     active_tp := na
     active_sl := na
+    if not na(tp_line)
+        line.delete(tp_line)
+        tp_line := na
+    if not na(sl_line)
+        line.delete(sl_line)
+        sl_line := na
 
 // ══════════════════════════════════════════════════════════════
 //  ENTRIES
@@ -279,6 +287,36 @@ bool just_closed = strategy.position_size == 0 and strategy.position_size[1] != 
 if just_closed
     active_tp := na
     active_sl := na
+    if not na(tp_line)
+        line.delete(tp_line)
+        tp_line := na
+    if not na(sl_line)
+        line.delete(sl_line)
+        sl_line := na
+
+// ── Moving-x TP/SL lines: x1 advances to current bar every tick so the line
+//    has no historical anchor; deleted lines have zero Y-axis footprint.
+if strategy.position_size != 0 and not na(active_tp) and i_show_tp
+    if na(tp_line)
+        tp_line := line.new(bar_index, active_tp, bar_index + 1, active_tp,
+             color  = color.new(color.lime, 20),
+             style  = line.style_dashed,
+             width  = 1,
+             extend = extend.right)
+        sl_line := line.new(bar_index, active_sl, bar_index + 1, active_sl,
+             color  = color.new(color.red, 20),
+             style  = line.style_dashed,
+             width  = 1,
+             extend = extend.right)
+    else
+        line.set_x1(tp_line, bar_index)
+        line.set_x2(tp_line, bar_index + 1)
+        line.set_y1(tp_line, active_tp)
+        line.set_y2(tp_line, active_tp)
+        line.set_x1(sl_line, bar_index)
+        line.set_x2(sl_line, bar_index + 1)
+        line.set_y1(sl_line, active_sl)
+        line.set_y2(sl_line, active_sl)
 
 // ── Session-end force exit
 if ses_end and not flat
@@ -293,30 +331,29 @@ bgcolor(in_ny  ? color.new(color.orange, 92) : na, title="NY Window")
 barcolor(bull_cat and in_ses ? color.new(color.lime, 0) : na, title="Bull Catalyst")
 barcolor(bear_cat and in_ses ? color.new(color.red,  0) : na, title="Bear Catalyst")
 
-// TP / SL via plot() – only has a value while a trade is open, so it can
-// never pull the Y-axis to a stale historical price level.
-plot(i_show_tp ? active_tp : na, "TP", color=color.new(color.lime, 20), linewidth=1, style=plot.style_linebr)
-plot(i_show_tp ? active_sl : na, "SL", color=color.new(color.red,  20), linewidth=1, style=plot.style_linebr)
+// TP/SL lines are managed via line.new() with moving x1 (see above).
+// plot() is intentionally absent: its persistent series permanently
+// anchors the Y-axis at every historical bar where it was non-na.
 
-// Fractal markers at the confirmed fractal bar (N bars ago)
-// Fractal markers: plotshape() binds directly to bar high/low and never
-// stretches the Y-axis, unlike label.new() with yloc.abovebar.
-// in_ses[N] restricts display to fractals that formed inside a session.
-plotshape(i_show_frac and bear_fractal and in_ses[N],
-     title    = "Bear Fractal",
-     style    = shape.triangledown,
-     location = location.abovebar,
-     color    = color.orange,
-     size     = size.tiny,
-     offset   = -N)
+// Fractal markers via label.new() at the actual fractal bar (bar_index - N).
+// yloc.abovebar/belowbar is relative to bar high/low → never distorts Y-axis.
+if i_show_frac and bear_fractal and in_ses[N]
+    label.new(bar_index - N, na,
+         text      = "▼",
+         yloc      = yloc.abovebar,
+         style     = label.style_none,
+         color     = color.new(color.orange, 100),
+         textcolor = color.orange,
+         size      = size.tiny)
 
-plotshape(i_show_frac and bull_fractal and in_ses[N],
-     title    = "Bull Fractal",
-     style    = shape.triangleup,
-     location = location.belowbar,
-     color    = color.aqua,
-     size     = size.tiny,
-     offset   = -N)
+if i_show_frac and bull_fractal and in_ses[N]
+    label.new(bar_index - N, na,
+         text      = "▲",
+         yloc      = yloc.belowbar,
+         style     = label.style_none,
+         color     = color.new(color.aqua, 100),
+         textcolor = color.aqua,
+         size      = size.tiny)
 
 // ══════════════════════════════════════════════════════════════
 //  INFO TABLE  (top-right)
