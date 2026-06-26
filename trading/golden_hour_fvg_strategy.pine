@@ -182,7 +182,12 @@ if sz_on and close > sz_top + i_sl_buf * atr
     if not na(sz_box)
         box.delete(sz_box)
         sz_box := na
-if ses_end
+// Clear on every bar outside session — more robust than ses_end alone.
+// If ses_end misses due to a data gap, stale fractals or boxes from a
+// historical session can set TP/SL far from current price, which makes
+// TradingView draw a strategy exit line at that distant level and stretches
+// the Y-axis.  Clearing here guarantees no cross-session contamination.
+if not in_ses
     bear_fracs.clear()
     bull_fracs.clear()
     bz_on := false
@@ -315,9 +320,9 @@ if barstate.islastconfirmedhistory or barstate.islast
     float wr    = total > 0 ? strategy.wintrades / total * 100 : 0.0
     float pf    = strategy.grossloss > 0 ? strategy.grossprofit / strategy.grossloss : 0.0
 
-    table.cell(tbl, 0, 0, "GH FVG + FRACTAL TP  v4",
+    table.cell(tbl, 0, 0, "GH FVG + FRACTAL TP  v4.1",
          text_color=color.white, text_size=size.small, bgcolor=color.new(color.navy, 60))
-    table.cell(tbl, 1, 0, "plotshape ed.",
+    table.cell(tbl, 1, 0, "not-in-ses cleanup",
          text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 60))
     table.cell(tbl, 0, 1, "Win Rate",
          text_color=color.silver, text_size=size.tiny)
