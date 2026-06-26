@@ -1,15 +1,13 @@
 //@version=6
 strategy(
-     title             = "Golden Hour – ICT FVG + Fractal TP v3 (Chanelle Style)",
+     title             = "Golden Hour – ICT FVG + Fractal TP v4 (Chanelle Style)",
      overlay           = true,
      default_qty_type  = strategy.percent_of_equity,
      default_qty_value = 5,
      commission_type   = strategy.commission.percent,
      commission_value  = 0.02,
      slippage          = 2,
-     max_boxes_count   = 500,
-     max_labels_count  = 500,
-     max_lines_count   = 500)
+     max_boxes_count   = 500)
 
 // ══════════════════════════════════════════════════════════════
 //  INPUTS
@@ -34,8 +32,7 @@ int i_frac_n = input.int(2, "Fractal Arms  (2 = 5-bar)", group=G4, minval=1, max
 var string G5 = "Display"
 bool i_show_fvg  = input.bool(true, "Show FVG Zones",    group=G5)
 bool i_show_frac = input.bool(true, "Show Fractals",      group=G5)
-bool i_show_lbl  = input.bool(true, "Show Entry Labels",  group=G5)
-bool i_show_tp   = input.bool(true, "Show TP / SL Lines", group=G5)
+bool i_show_sig  = input.bool(true, "Show Entry Signals", group=G5)
 
 // ══════════════════════════════════════════════════════════════
 //  SESSIONS
@@ -56,8 +53,8 @@ bool bear_cat = close < open and body > i_cat_mult * atr
 
 // ══════════════════════════════════════════════════════════════
 //  BILL WILLIAMS FRACTAL  (5-bar default, arms=2)
-//  Bear fractal → local HIGH → TP target for LONG trades
-//  Bull fractal → local LOW  → TP target for SHORT trades
+//  Bear fractal → local HIGH → TP for LONG
+//  Bull fractal → local LOW  → TP for SHORT
 // ══════════════════════════════════════════════════════════════
 int N = i_frac_n
 
@@ -80,13 +77,11 @@ if N >= 5
 bool bear_fractal = bear_frac_ok
 bool bull_fractal = bull_frac_ok
 
-// Rolling arrays store last 30 confirmed fractal levels
+// Only push fractals whose centre bar was inside a session so that
+// stale cross-session levels never set active_tp far from current price.
 var array<float> bear_fracs = array.new<float>()
 var array<float> bull_fracs = array.new<float>()
 
-// Only push fractals whose centre bar was inside a session;
-// stale cross-session fractals would set active_tp far from current price
-// and stretch the Y-axis, making K-bars shrink to the chart bottom.
 if bear_fractal and in_ses[N]
     bear_fracs.push(high[N])
     if bear_fracs.size() > 30
@@ -97,7 +92,6 @@ if bull_fractal and in_ses[N]
     if bull_fracs.size() > 30
         bull_fracs.shift()
 
-// Search for nearest fractal above/below entry that gives >= i_min_rr
 find_tp_above(float entry, float risk) =>
     float result  = na
     float best_rr = na
@@ -122,23 +116,18 @@ find_tp_below(float entry, float risk) =>
 
 // ══════════════════════════════════════════════════════════════
 //  FVG DETECTION  (3-candle ICT structure)
-//  Bullish : low[0] > high[2]  AND  bull catalyst at bar[1]
-//  Bearish : high[0] < low[2]  AND  bear catalyst at bar[1]
 // ══════════════════════════════════════════════════════════════
 bool bull_fvg = low  > high[2] and bull_cat[1] and in_ses[1]
 bool bear_fvg = high < low[2]  and bear_cat[1] and in_ses[1]
 
 // ══════════════════════════════════════════════════════════════
 //  ZONE STATE + DYNAMIC BOX DRAWING
-//  Boxes are stored as var references and their right edge
-//  is updated every bar via box.set_right() so they follow
-//  the chart as new K-bars arrive.
 // ══════════════════════════════════════════════════════════════
 var float bz_top = na
 var float bz_bot = na
 var bool  bz_on  = false
 var int   bz_bar = na
-var box   bz_box = na   // live reference → right edge updated each bar
+var box   bz_box = na
 
 var float sz_top = na
 var float sz_bot = na
@@ -146,14 +135,6 @@ var bool  sz_on  = false
 var int   sz_bar = na
 var box   sz_box = na
 
-// Active trade TP/SL stored as price levels; rendered via line.new() with
-// moving x1 so no historical bar holds an absolute price → zero Y-axis distortion.
-var float active_tp = na
-var float active_sl = na
-var line  tp_line   = na
-var line  sl_line   = na
-
-// ── Register new FVG
 if bull_fvg
     bz_top := low
     bz_bot := high[2]
@@ -186,13 +167,11 @@ if bear_fvg
              text_size    = size.tiny,
              text_color   = color.red)
 
-// ── Extend active FVG boxes to current bar every tick
 if bz_on and not na(bz_box)
     box.set_right(bz_box, bar_index)
 if sz_on and not na(sz_box)
     box.set_right(sz_box, bar_index)
 
-// ── Zone invalidation (BOS: price closes beyond far edge) – also delete box
 if bz_on and close < bz_bot - i_sl_buf * atr
     bz_on := false
     if not na(bz_box)
@@ -204,7 +183,7 @@ if sz_on and close > sz_top + i_sl_buf * atr
         box.delete(sz_box)
         sz_box := na
 if ses_end
-    bear_fracs.clear()   // purge stale fractal levels so next session starts clean
+    bear_fracs.clear()
     bull_fracs.clear()
     bz_on := false
     sz_on := false
@@ -214,121 +193,58 @@ if ses_end
     if not na(sz_box)
         box.delete(sz_box)
         sz_box := na
-    active_tp := na
-    active_sl := na
-    if not na(tp_line)
-        line.delete(tp_line)
-        tp_line := na
-    if not na(sl_line)
-        line.delete(sl_line)
-        sl_line := na
 
 // ══════════════════════════════════════════════════════════════
 //  ENTRIES
+//  Entry parameters pre-computed outside if-blocks so that the
+//  same values can drive both strategy.entry() and plotshape().
 // ══════════════════════════════════════════════════════════════
 bool flat      = strategy.position_size == 0
 bool tradeable = flat and in_ses
 
-// ── LONG: retracement into bullish FVG
+// ── LONG
 bool long_in_zone = low <= bz_top and high >= bz_bot
 bool long_cond    = tradeable and bz_on and bar_index > bz_bar and long_in_zone
 
+float bz_entry     = bz_on ? bz_bot + (bz_top - bz_bot) * (1.0 - i_fvg_pct) : na
+float bz_sl        = bz_on ? bz_bot - i_sl_buf * atr : na
+float bz_risk      = bz_on ? math.max(bz_entry - bz_sl, syminfo.mintick * 5) : na
+float long_frac_tp = long_cond ? find_tp_above(bz_entry, bz_risk) : na
+bool  long_is_frac = not na(long_frac_tp)
+
 if long_cond
-    float entry_px = bz_bot + (bz_top - bz_bot) * (1.0 - i_fvg_pct)
-    float sl_px    = bz_bot - i_sl_buf * atr
-    float risk     = math.max(entry_px - sl_px, syminfo.mintick * 5)
-    float frac_tp  = find_tp_above(entry_px, risk)
-    bool  use_frac = not na(frac_tp)
-    float tp_px    = use_frac ? frac_tp : entry_px + risk * i_rr_fb
-    float achieved = (tp_px - entry_px) / risk
+    float tp_px    = long_is_frac ? long_frac_tp : bz_entry + bz_risk * i_rr_fb
+    float achieved = long_is_frac ? (long_frac_tp - bz_entry) / bz_risk : i_rr_fb
+    strategy.entry("Long", strategy.long,
+         comment = (long_is_frac ? "FRAC " : "RR ") + str.tostring(achieved, "#.##") + "R")
+    strategy.exit("L-Exit", from_entry="Long", stop=bz_sl, limit=tp_px)
+    bz_on := false
 
-    strategy.entry("Long", strategy.long)
-    strategy.exit("L-Exit", from_entry="Long", stop=sl_px, limit=tp_px)
-    bz_on     := false
-    active_tp := tp_px
-    active_sl := sl_px
-
-    if i_show_lbl
-        string src = use_frac ? "FRAC" : "RR"
-        label.new(bar_index, na,
-             text      = "↑ L  " + src + "\n" + str.tostring(achieved, "#.##") + "R",
-             yloc      = yloc.belowbar,
-             style     = label.style_label_up,
-             color     = use_frac ? color.lime : color.teal,
-             textcolor = color.black,
-             size      = size.small)
-
-// ── SHORT: retracement into bearish FVG
+// ── SHORT
 bool short_in_zone = high >= sz_bot and low <= sz_top
 bool short_cond    = tradeable and sz_on and bar_index > sz_bar and short_in_zone
 
+float sz_entry      = sz_on ? sz_top - (sz_top - sz_bot) * (1.0 - i_fvg_pct) : na
+float sz_sl         = sz_on ? sz_top + i_sl_buf * atr : na
+float sz_risk       = sz_on ? math.max(sz_sl - sz_entry, syminfo.mintick * 5) : na
+float short_frac_tp = short_cond ? find_tp_below(sz_entry, sz_risk) : na
+bool  short_is_frac = not na(short_frac_tp)
+
 if short_cond
-    float entry_px = sz_top - (sz_top - sz_bot) * (1.0 - i_fvg_pct)
-    float sl_px    = sz_top + i_sl_buf * atr
-    float risk     = math.max(sl_px - entry_px, syminfo.mintick * 5)
-    float frac_tp  = find_tp_below(entry_px, risk)
-    bool  use_frac = not na(frac_tp)
-    float tp_px    = use_frac ? frac_tp : entry_px - risk * i_rr_fb
-    float achieved = (entry_px - tp_px) / risk
+    float tp_px    = short_is_frac ? short_frac_tp : sz_entry - sz_risk * i_rr_fb
+    float achieved = short_is_frac ? (sz_entry - short_frac_tp) / sz_risk : i_rr_fb
+    strategy.entry("Short", strategy.short,
+         comment = (short_is_frac ? "FRAC " : "RR ") + str.tostring(achieved, "#.##") + "R")
+    strategy.exit("S-Exit", from_entry="Short", stop=sz_sl, limit=tp_px)
+    sz_on := false
 
-    strategy.entry("Short", strategy.short)
-    strategy.exit("S-Exit", from_entry="Short", stop=sl_px, limit=tp_px)
-    sz_on     := false
-    active_tp := tp_px
-    active_sl := sl_px
-
-    if i_show_lbl
-        string src = use_frac ? "FRAC" : "RR"
-        label.new(bar_index, na,
-             text      = "↓ S  " + src + "\n" + str.tostring(achieved, "#.##") + "R",
-             yloc      = yloc.abovebar,
-             style     = label.style_label_down,
-             color     = use_frac ? color.red : color.maroon,
-             textcolor = color.white,
-             size      = size.small)
-
-// ── Clear TP/SL levels once trade is closed
-bool just_closed = strategy.position_size == 0 and strategy.position_size[1] != 0
-if just_closed
-    active_tp := na
-    active_sl := na
-    if not na(tp_line)
-        line.delete(tp_line)
-        tp_line := na
-    if not na(sl_line)
-        line.delete(sl_line)
-        sl_line := na
-
-// ── Moving-x TP/SL lines: x1 advances to current bar every tick so the line
-//    has no historical anchor; deleted lines have zero Y-axis footprint.
-if strategy.position_size != 0 and not na(active_tp) and i_show_tp
-    if na(tp_line)
-        tp_line := line.new(bar_index, active_tp, bar_index + 1, active_tp,
-             color  = color.new(color.lime, 20),
-             style  = line.style_dashed,
-             width  = 1,
-             extend = extend.right)
-        sl_line := line.new(bar_index, active_sl, bar_index + 1, active_sl,
-             color  = color.new(color.red, 20),
-             style  = line.style_dashed,
-             width  = 1,
-             extend = extend.right)
-    else
-        line.set_x1(tp_line, bar_index)
-        line.set_x2(tp_line, bar_index + 1)
-        line.set_y1(tp_line, active_tp)
-        line.set_y2(tp_line, active_tp)
-        line.set_x1(sl_line, bar_index)
-        line.set_x2(sl_line, bar_index + 1)
-        line.set_y1(sl_line, active_sl)
-        line.set_y2(sl_line, active_sl)
-
-// ── Session-end force exit
 if ses_end and not flat
     strategy.close_all(comment="EOD")
 
 // ══════════════════════════════════════════════════════════════
 //  VISUALS
+//  全部改用 plotshape()，無 offset，無絕對價位繪圖
+//  → Y 軸永遠只由 K 線本身決定，不會被任何指標拉伸
 // ══════════════════════════════════════════════════════════════
 bgcolor(in_lon ? color.new(color.blue,   92) : na, title="London Window")
 bgcolor(in_ny  ? color.new(color.orange, 92) : na, title="NY Window")
@@ -336,29 +252,53 @@ bgcolor(in_ny  ? color.new(color.orange, 92) : na, title="NY Window")
 barcolor(bull_cat and in_ses ? color.new(color.lime, 0) : na, title="Bull Catalyst")
 barcolor(bear_cat and in_ses ? color.new(color.red,  0) : na, title="Bear Catalyst")
 
-// TP/SL lines are managed via line.new() with moving x1 (see above).
-// plot() is intentionally absent: its persistent series permanently
-// anchors the Y-axis at every historical bar where it was non-na.
+// 進場訊號
+plotshape(i_show_sig and long_cond and long_is_frac,
+     title    = "Long FRAC",
+     style    = shape.labelup,
+     location = location.belowbar,
+     color    = color.lime,
+     text     = "↑ L FRAC",
+     textcolor= color.black,
+     size     = size.small)
+plotshape(i_show_sig and long_cond and not long_is_frac,
+     title    = "Long RR",
+     style    = shape.labelup,
+     location = location.belowbar,
+     color    = color.teal,
+     text     = "↑ L RR",
+     textcolor= color.white,
+     size     = size.small)
+plotshape(i_show_sig and short_cond and short_is_frac,
+     title    = "Short FRAC",
+     style    = shape.labeldown,
+     location = location.abovebar,
+     color    = color.red,
+     text     = "↓ S FRAC",
+     textcolor= color.white,
+     size     = size.small)
+plotshape(i_show_sig and short_cond and not short_is_frac,
+     title    = "Short RR",
+     style    = shape.labeldown,
+     location = location.abovebar,
+     color    = color.maroon,
+     text     = "↓ S RR",
+     textcolor= color.white,
+     size     = size.small)
 
-// Fractal markers via label.new() at the actual fractal bar (bar_index - N).
-// yloc.abovebar/belowbar is relative to bar high/low → never distorts Y-axis.
-if i_show_frac and bear_fractal and in_ses[N]
-    label.new(bar_index - N, na,
-         text      = "▼",
-         yloc      = yloc.abovebar,
-         style     = label.style_none,
-         color     = color.new(color.orange, 100),
-         textcolor = color.orange,
-         size      = size.tiny)
-
-if i_show_frac and bull_fractal and in_ses[N]
-    label.new(bar_index - N, na,
-         text      = "▲",
-         yloc      = yloc.belowbar,
-         style     = label.style_none,
-         color     = color.new(color.aqua, 100),
-         textcolor = color.aqua,
-         size      = size.tiny)
+// Fractal 標記（無 offset，貼在確認柱）
+plotshape(i_show_frac and bear_fractal and in_ses[N],
+     title    = "Bear Fractal",
+     style    = shape.triangledown,
+     location = location.abovebar,
+     color    = color.orange,
+     size     = size.tiny)
+plotshape(i_show_frac and bull_fractal and in_ses[N],
+     title    = "Bull Fractal",
+     style    = shape.triangleup,
+     location = location.belowbar,
+     color    = color.aqua,
+     size     = size.tiny)
 
 // ══════════════════════════════════════════════════════════════
 //  INFO TABLE  (top-right)
@@ -375,9 +315,9 @@ if barstate.islastconfirmedhistory or barstate.islast
     float wr    = total > 0 ? strategy.wintrades / total * 100 : 0.0
     float pf    = strategy.grossloss > 0 ? strategy.grossprofit / strategy.grossloss : 0.0
 
-    table.cell(tbl, 0, 0, "GH FVG + FRACTAL TP  v3",
+    table.cell(tbl, 0, 0, "GH FVG + FRACTAL TP  v4",
          text_color=color.white, text_size=size.small, bgcolor=color.new(color.navy, 60))
-    table.cell(tbl, 1, 0, "0.49 RR",
+    table.cell(tbl, 1, 0, "plotshape ed.",
          text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 60))
     table.cell(tbl, 0, 1, "Win Rate",
          text_color=color.silver, text_size=size.tiny)
