@@ -1,4 +1,131 @@
-# Golden Hour – ICT FVG + Fractal TP Strategy
+# Trading Strategies
+
+---
+
+## 策略一：Session Breakout – Prev Bar H/L
+
+**檔案**: `session_breakout_strategy.pine`  
+**版本**: v3  
+**類型**: Strategy (overlay)  
+**建議時間尺度**: 5M
+
+### 策略邏輯
+
+| 元素 | 說明 |
+|------|------|
+| Session | London 02:00–05:00 ET、NY **08:30**–11:00 ET |
+| 做多條件 | 當根 K 棒高點 > 前一根高點（`high > high[1]`） |
+| 做空條件 | 當根 K 棒低點 < 前一根低點（`low < low[1]`） |
+| 過濾 | 無趨勢過濾，純突破邏輯 |
+| SL | 前一根低點 − ATR buffer（做多）/ 前一根高點 + ATR buffer（做空） |
+| TP | 突破點 + Risk × R:R（預設 2R） |
+| 收盤 | Session 結束後強制平倉 |
+
+### 視覺元素
+
+| 符號 | 意義 |
+|------|------|
+| 綠色 ▲（K線下方） | 多單突破訊號 |
+| 紅色 ▼（K線上方） | 空單突破訊號 |
+| 青色背景 | London session |
+| 紫色背景 | NY session |
+
+### 修改歷程
+
+| 版本 | 變更 |
+|------|------|
+| v1 | 初始版：EMA 200 過濾 + NY 08:00 開始 |
+| v2 | 移除 EMA 過濾（原始需求無此條件） |
+| **v3** | **NY session 改為 08:30 開始；每 session 限一次預設改為 false** |
+
+### 完整程式碼（v3）
+
+```pine
+//@version=6
+strategy(
+    title             = "Session Breakout – Prev Bar H/L v3",
+    overlay           = true,
+    initial_capital   = 10000,
+    default_qty_type  = strategy.percent_of_equity,
+    default_qty_value = 10,
+    commission_type   = strategy.commission.percent,
+    commission_value  = 0.05,
+    slippage          = 1
+)
+
+var string G_SES = "Sessions"
+bool i_lon = input.bool(true, "London (02:00–05:00 ET)",  group=G_SES)
+bool i_ny  = input.bool(true, "NY (08:30–11:00 ET)",     group=G_SES)
+
+var string G_RR = "Risk / Reward"
+float i_rr      = input.float(2.0, "R:R Ratio",                         minval=0.5, step=0.5, group=G_RR)
+float i_sl_buf  = input.float(0.5, "SL ATR Buffer (multiplier)",         minval=0.0, step=0.1, group=G_RR)
+int   i_atr_l   = input.int(14,   "ATR Length",                          minval=1,             group=G_RR)
+bool  i_one_per = input.bool(false, "One Trade per Direction per Session",                      group=G_RR)
+
+var string G_VIS = "Visuals"
+bool i_show_sig = input.bool(true, "Show Signal Arrows", group=G_VIS)
+bool i_show_ses = input.bool(true, "Show Session BG",    group=G_VIS)
+
+bool lon_ses = i_lon and not na(time("", "0200-0500", "America/New_York"))
+bool ny_ses  = i_ny  and not na(time("", "0830-1100", "America/New_York"))
+bool in_ses  = lon_ses or ny_ses
+
+float atr = ta.atr(i_atr_l)
+bool flat = strategy.position_size == 0
+
+var bool ses_long_done  = false
+var bool ses_short_done = false
+
+if not in_ses
+    ses_long_done  := false
+    ses_short_done := false
+
+bool bo_long  = in_ses and flat and high > high[1]
+bool bo_short = in_ses and flat and low  < low[1]
+
+bool do_long  = bo_long  and (not i_one_per or not ses_long_done)
+bool do_short = bo_short and (not i_one_per or not ses_short_done)
+
+if do_long
+    float sl = low[1]  - i_sl_buf * atr
+    float rk = math.max(high[1] - sl, syminfo.mintick * 5)
+    float tp = high[1] + rk * i_rr
+    strategy.cancel("Short")
+    strategy.entry("Long",   strategy.long,  comment="BO↑")
+    strategy.exit("L-Exit", from_entry="Long",  stop=sl, limit=tp)
+    ses_long_done := true
+
+if do_short
+    float sl = high[1] + i_sl_buf * atr
+    float rk = math.max(sl - low[1], syminfo.mintick * 5)
+    float tp = low[1]  - rk * i_rr
+    strategy.cancel("Long")
+    strategy.entry("Short",  strategy.short, comment="BO↓")
+    strategy.exit("S-Exit", from_entry="Short", stop=sl, limit=tp)
+    ses_short_done := true
+
+if not in_ses
+    strategy.cancel("Long")
+    strategy.cancel("Short")
+    if strategy.position_size != 0
+        strategy.close_all(comment="EOD")
+
+bgcolor(i_show_ses and lon_ses ? color.new(color.teal,   92) : na, title="London BG")
+bgcolor(i_show_ses and ny_ses  ? color.new(color.purple, 92) : na, title="NY BG")
+
+plotshape(i_show_sig and do_long,
+    title="Long Breakout", style=shape.triangleup, location=location.belowbar,
+    color=color.lime, size=size.small)
+
+plotshape(i_show_sig and do_short,
+    title="Short Breakout", style=shape.triangledown, location=location.abovebar,
+    color=color.red, size=size.small)
+```
+
+---
+
+## 策略二：Golden Hour – ICT FVG + Fractal TP
 
 **版本**: v6  
 **語言**: Pine Script v6  
