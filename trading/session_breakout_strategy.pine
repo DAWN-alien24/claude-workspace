@@ -1,6 +1,6 @@
 //@version=6
 strategy(
-    title             = "Session Breakout – Prev Bar H/L v2",
+    title             = "Session Breakout – Prev Bar H/L v3",
     overlay           = true,
     initial_capital   = 10000,
     default_qty_type  = strategy.percent_of_equity,
@@ -12,14 +12,14 @@ strategy(
 
 // ─── Inputs ───────────────────────────────────────────────────────────────────
 var string G_SES = "Sessions"
-bool i_lon = input.bool(true, "London (02:00–05:00 ET)", group=G_SES)
-bool i_ny  = input.bool(true, "NY (08:00–11:00 ET)",     group=G_SES)
+bool i_lon = input.bool(true, "London (02:00–05:00 ET)",  group=G_SES)
+bool i_ny  = input.bool(true, "NY (08:30–11:00 ET)",     group=G_SES)
 
 var string G_RR = "Risk / Reward"
 float i_rr      = input.float(2.0, "R:R Ratio",                         minval=0.5, step=0.5, group=G_RR)
 float i_sl_buf  = input.float(0.5, "SL ATR Buffer (multiplier)",         minval=0.0, step=0.1, group=G_RR)
 int   i_atr_l   = input.int(14,   "ATR Length",                          minval=1,             group=G_RR)
-bool  i_one_per = input.bool(true, "One Trade per Direction per Session",                       group=G_RR)
+bool  i_one_per = input.bool(false, "One Trade per Direction per Session",                       group=G_RR)
 
 var string G_VIS = "Visuals"
 bool i_show_sig = input.bool(true, "Show Signal Arrows", group=G_VIS)
@@ -27,7 +27,7 @@ bool i_show_ses = input.bool(true, "Show Session BG",    group=G_VIS)
 
 // ─── Sessions ─────────────────────────────────────────────────────────────────
 bool lon_ses = i_lon and not na(time("", "0200-0500", "America/New_York"))
-bool ny_ses  = i_ny  and not na(time("", "0800-1100", "America/New_York"))
+bool ny_ses  = i_ny  and not na(time("", "0830-1100", "America/New_York"))
 bool in_ses  = lon_ses or ny_ses
 
 // ─── ATR ──────────────────────────────────────────────────────────────────────
