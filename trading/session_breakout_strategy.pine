@@ -1,0 +1,109 @@
+//@version=6
+strategy(
+    title             = "Session Breakout – Prev Bar H/L v1",
+    overlay           = true,
+    initial_capital   = 10000,
+    default_qty_type  = strategy.percent_of_equity,
+    default_qty_value = 10,
+    commission_type   = strategy.commission.percent,
+    commission_value  = 0.05,
+    slippage          = 1
+)
+
+// ─── Inputs ───────────────────────────────────────────────────────────────────
+var string G_SES = "Sessions"
+bool i_lon = input.bool(true, "London (02:00–05:00 ET)", group=G_SES)
+bool i_ny  = input.bool(true, "NY (08:00–11:00 ET)",     group=G_SES)
+
+var string G_RR = "Risk / Reward"
+float i_rr      = input.float(2.0, "R:R Ratio",                          minval=0.5, step=0.5, group=G_RR)
+float i_sl_buf  = input.float(0.5, "SL ATR Buffer (multiplier)",          minval=0.0, step=0.1, group=G_RR)
+int   i_atr_l   = input.int(14,   "ATR Length",                           minval=1,             group=G_RR)
+bool  i_one_per = input.bool(true, "One Trade per Direction per Session",                        group=G_RR)
+
+var string G_EMA = "EMA Trend Filter"
+bool i_use_ema  = input.bool(true, "Enable EMA Filter", group=G_EMA)
+int  i_ema_len  = input.int(200,   "EMA Length",        minval=1, group=G_EMA)
+bool i_show_ema = input.bool(true, "Show EMA Line",     group=G_EMA)
+
+var string G_VIS = "Visuals"
+bool i_show_sig = input.bool(true, "Show Signal Arrows", group=G_VIS)
+bool i_show_ses = input.bool(true, "Show Session BG",    group=G_VIS)
+
+// ─── Sessions ─────────────────────────────────────────────────────────────────
+bool lon_ses = i_lon and not na(time("", "0200-0500", "America/New_York"))
+bool ny_ses  = i_ny  and not na(time("", "0800-1100", "America/New_York"))
+bool in_ses  = lon_ses or ny_ses
+
+// ─── Indicators ───────────────────────────────────────────────────────────────
+float atr     = ta.atr(i_atr_l)
+float ema_val = ta.ema(close, i_ema_len)
+bool bull_trend = not i_use_ema or close > ema_val
+bool bear_trend = not i_use_ema or close < ema_val
+
+// ─── Position State ───────────────────────────────────────────────────────────
+bool flat = strategy.position_size == 0
+
+// ─── Per-session Trade Guards ─────────────────────────────────────────────────
+var bool ses_long_done  = false
+var bool ses_short_done = false
+
+if not in_ses
+    ses_long_done  := false
+    ses_short_done := false
+
+// ─── Breakout Conditions ──────────────────────────────────────────────────────
+// Long:  current bar's high exceeds previous bar's high (above-prev-high breakout)
+// Short: current bar's low  falls below previous bar's low (below-prev-low breakout)
+bool bo_long  = in_ses and flat and high > high[1] and bull_trend
+bool bo_short = in_ses and flat and low  < low[1]  and bear_trend
+
+bool do_long  = bo_long  and (not i_one_per or not ses_long_done)
+bool do_short = bo_short and (not i_one_per or not ses_short_done)
+
+// ─── Entries ──────────────────────────────────────────────────────────────────
+// Risk measured from breakout level (high[1] / low[1]) to SL below prev low / above prev high
+if do_long
+    float sl = low[1]  - i_sl_buf * atr
+    float rk = math.max(high[1] - sl, syminfo.mintick * 5)
+    float tp = high[1] + rk * i_rr
+    strategy.cancel("Short")
+    strategy.entry("Long",   strategy.long,  comment="BO↑")
+    strategy.exit("L-Exit", from_entry="Long",  stop=sl, limit=tp)
+    ses_long_done := true
+
+if do_short
+    float sl = high[1] + i_sl_buf * atr
+    float rk = math.max(sl - low[1], syminfo.mintick * 5)
+    float tp = low[1]  - rk * i_rr
+    strategy.cancel("Long")
+    strategy.entry("Short",  strategy.short, comment="BO↓")
+    strategy.exit("S-Exit", from_entry="Short", stop=sl, limit=tp)
+    ses_short_done := true
+
+// ─── Session Cleanup ──────────────────────────────────────────────────────────
+if not in_ses
+    strategy.cancel("Long")
+    strategy.cancel("Short")
+    if strategy.position_size != 0
+        strategy.close_all(comment="EOD")
+
+// ─── Visuals ──────────────────────────────────────────────────────────────────
+bgcolor(i_show_ses and lon_ses ? color.new(color.teal,   92) : na, title="London BG")
+bgcolor(i_show_ses and ny_ses  ? color.new(color.purple, 92) : na, title="NY BG")
+
+plot(i_show_ema ? ema_val : na, title="EMA", color=color.new(color.yellow, 0), linewidth=1)
+
+plotshape(i_show_sig and do_long,
+    title="Long Breakout",
+    style   = shape.triangleup,
+    location= location.belowbar,
+    color   = color.lime,
+    size    = size.small)
+
+plotshape(i_show_sig and do_short,
+    title="Short Breakout",
+    style   = shape.triangledown,
+    location= location.abovebar,
+    color   = color.red,
+    size    = size.small)
