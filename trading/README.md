@@ -1,6 +1,6 @@
 # Golden Hour – ICT FVG + Fractal TP Strategy
 
-**版本**: v4.1  
+**版本**: v5  
 **語言**: Pine Script v6  
 **類型**: Strategy (overlay)  
 **Branch**: `claude/automated-trading-mechanism-z73fw0`
@@ -19,6 +19,19 @@
 | SL | FVG 底部 − ATR buffer |
 | 收盤 | Session 結束強制平倉 |
 
+## 視覺元素（全部 plotshape，零 box.new）
+
+| 符號 | 意義 |
+|------|------|
+| 橘色 ▼ | Bear Fractal（K線上方） |
+| 藍色 ▲ | Bull Fractal（K線下方） |
+| 綠色 FVG label（下方） | Bull FVG 出現 |
+| 紅色 FVG label（上方） | Bear FVG 出現 |
+| 綠色/青色 ↑ label（下方） | Long 進場訊號（FRAC / RR） |
+| 紅色/深紅 ↓ label（上方） | Short 進場訊號（FRAC / RR） |
+| 藍色背景 | London session |
+| 橘色背景 | NY session |
+
 ## 修改歷程
 
 | 版本 | 變更 |
@@ -26,34 +39,31 @@
 | v1 | 初始版：label.new() + line.new() → Y 軸飄移 |
 | v2 | 改用 plot(active_tp/sl) → 仍有舊 fractal 污染 |
 | v3 | line.new() moving anchor → 根本原因未解 |
-| v4 | 全面改用 plotshape()，移除所有絕對座標繪圖 |
-| v4.1 | ses_end 清除改為 `if not in_ses`，防止資料缺口導致舊 fractal/box 殘留進而拉伸 Y 軸 |
+| v4 | 全面改用 plotshape()，但 FVG 仍用 box.new() |
+| v4.1 | ses_end 清除改為 if not in_ses |
+| **v5** | **徹底移除 box.new()；FVG 改用 plotshape()；零絕對 Y 座標** |
 
 ## Y 軸飄移根本原因
 
-`ses_end` 只在 session 結束的轉換那一根 K 線觸發。若遇到資料缺口（假日/早收），`ses_end` 沒有觸發 → `bear_fracs` 留著舊 session 高點（如 3500）→ 下一個 session 的 `find_tp_above()` 抓到 3500 → `strategy.exit(limit=3500)` → TradingView 在圖上畫 TP 水平線在 3500 → Y 軸拉伸 → 當前 K 線壓到圖底。
+`box.new()` 會在圖上留下絕對 Y 座標的矩形。若歷史 session 的 box 沒有被正確刪除（ses_end 因資料缺口未觸發），那個舊價格的矩形就會拉伸 Y 軸，把當前 K 線壓到圖底部。
 
-**v4.1 解法**：所有狀態清除改為 `if not in_ses`，每根非 session 的 K 線都確保清空。
+**v5 解法**：移除所有 `box.new()`，改用 `plotshape(location.belowbar/abovebar)`，與期貨穩定用的畫圖方式完全相同。
 
 ---
 
-## 完整 Pine Script 程式碼
+## 完整 Pine Script 程式碼（v5）
 
 ```pine
 //@version=6
 strategy(
-     title             = "Golden Hour – ICT FVG + Fractal TP v4 (Chanelle Style)",
+     title             = "Golden Hour – ICT FVG + Fractal TP v5 (Chanelle Style)",
      overlay           = true,
      default_qty_type  = strategy.percent_of_equity,
      default_qty_value = 5,
      commission_type   = strategy.commission.percent,
      commission_value  = 0.02,
-     slippage          = 2,
-     max_boxes_count   = 500)
+     slippage          = 2)
 
-// ══════════════════════════════════════════════════════════════
-//  INPUTS
-// ══════════════════════════════════════════════════════════════
 var string G1 = "Sessions (New York Time)"
 bool i_lon = input.bool(true, "London Open  02:00–05:00 ET", group=G1)
 bool i_ny  = input.bool(true, "NY Open      08:00–11:00 ET", group=G1)
@@ -72,37 +82,23 @@ var string G4 = "Fractal"
 int i_frac_n = input.int(2, "Fractal Arms  (2 = 5-bar)", group=G4, minval=1, maxval=5)
 
 var string G5 = "Display"
-bool i_show_fvg  = input.bool(true, "Show FVG Zones",    group=G5)
-bool i_show_frac = input.bool(true, "Show Fractals",      group=G5)
-bool i_show_sig  = input.bool(true, "Show Entry Signals", group=G5)
+bool i_show_fvg  = input.bool(true, "Show FVG Signals",   group=G5)
+bool i_show_frac = input.bool(true, "Show Fractals",       group=G5)
+bool i_show_sig  = input.bool(true, "Show Entry Signals",  group=G5)
 
-// ══════════════════════════════════════════════════════════════
-//  SESSIONS
-// ══════════════════════════════════════════════════════════════
 bool in_lon  = i_lon and not na(time(timeframe.period, "0200-0500", "America/New_York"))
 bool in_ny   = i_ny  and not na(time(timeframe.period, "0800-1100", "America/New_York"))
 bool in_ses  = in_lon or in_ny
 bool ses_end = in_ses[1] and not in_ses
 
-// ══════════════════════════════════════════════════════════════
-//  ATR + CATALYST CANDLE
-// ══════════════════════════════════════════════════════════════
 float atr  = ta.atr(i_atr_len)
 float body = math.abs(close - open)
-
 bool bull_cat = close > open and body > i_cat_mult * atr
 bool bear_cat = close < open and body > i_cat_mult * atr
 
-// ══════════════════════════════════════════════════════════════
-//  BILL WILLIAMS FRACTAL  (5-bar default, arms=2)
-//  Bear fractal → local HIGH → TP for LONG
-//  Bull fractal → local LOW  → TP for SHORT
-// ══════════════════════════════════════════════════════════════
 int N = i_frac_n
-
 bool bear_frac_ok = high[N] > high[N-1] and high[N] > high[N+1]
 bool bull_frac_ok = low[N]  < low[N-1]  and low[N]  < low[N+1]
-
 if N >= 2
     bear_frac_ok := bear_frac_ok and high[N] > high[N-2] and high[N] > high[N+2]
     bull_frac_ok := bull_frac_ok and low[N]  < low[N-2]  and low[N]  < low[N+2]
@@ -119,8 +115,6 @@ if N >= 5
 bool bear_fractal = bear_frac_ok
 bool bull_fractal = bull_frac_ok
 
-// Only push fractals whose centre bar was inside a session so that
-// stale cross-session levels never set active_tp far from current price.
 var array<float> bear_fracs = array.new<float>()
 var array<float> bull_fracs = array.new<float>()
 
@@ -128,7 +122,6 @@ if bear_fractal and in_ses[N]
     bear_fracs.push(high[N])
     if bear_fracs.size() > 30
         bear_fracs.shift()
-
 if bull_fractal and in_ses[N]
     bull_fracs.push(low[N])
     if bull_fracs.size() > 30
@@ -156,101 +149,45 @@ find_tp_below(float entry, float risk) =>
                 best_rr := rr
     result
 
-// ══════════════════════════════════════════════════════════════
-//  FVG DETECTION  (3-candle ICT structure)
-// ══════════════════════════════════════════════════════════════
 bool bull_fvg = low  > high[2] and bull_cat[1] and in_ses[1]
 bool bear_fvg = high < low[2]  and bear_cat[1] and in_ses[1]
 
-// ══════════════════════════════════════════════════════════════
-//  ZONE STATE + DYNAMIC BOX DRAWING
-// ══════════════════════════════════════════════════════════════
 var float bz_top = na
 var float bz_bot = na
 var bool  bz_on  = false
 var int   bz_bar = na
-var box   bz_box = na
 
 var float sz_top = na
 var float sz_bot = na
 var bool  sz_on  = false
 var int   sz_bar = na
-var box   sz_box = na
 
 if bull_fvg
     bz_top := low
     bz_bot := high[2]
     bz_on  := true
     bz_bar := bar_index
-    if i_show_fvg
-        if not na(bz_box)
-            box.delete(bz_box)
-        bz_box := box.new(bar_index - 2, bz_top, bar_index, bz_bot,
-             border_color = color.new(color.lime, 20),
-             bgcolor      = color.new(color.lime, 82),
-             border_width = 1,
-             text         = "↑ Bull FVG",
-             text_size    = size.tiny,
-             text_color   = color.lime)
 
 if bear_fvg
     sz_top := low[2]
     sz_bot := high
     sz_on  := true
     sz_bar := bar_index
-    if i_show_fvg
-        if not na(sz_box)
-            box.delete(sz_box)
-        sz_box := box.new(bar_index - 2, sz_top, bar_index, sz_bot,
-             border_color = color.new(color.red, 20),
-             bgcolor      = color.new(color.red, 82),
-             border_width = 1,
-             text         = "↓ Bear FVG",
-             text_size    = size.tiny,
-             text_color   = color.red)
-
-if bz_on and not na(bz_box)
-    box.set_right(bz_box, bar_index)
-if sz_on and not na(sz_box)
-    box.set_right(sz_box, bar_index)
 
 if bz_on and close < bz_bot - i_sl_buf * atr
     bz_on := false
-    if not na(bz_box)
-        box.delete(bz_box)
-        bz_box := na
 if sz_on and close > sz_top + i_sl_buf * atr
     sz_on := false
-    if not na(sz_box)
-        box.delete(sz_box)
-        sz_box := na
 
-// Clear on every bar outside session — more robust than ses_end alone.
-// If ses_end misses due to a data gap, stale fractals or boxes from a
-// historical session can set TP/SL far from current price, which makes
-// TradingView draw a strategy exit line at that distant level and stretches
-// the Y-axis.  Clearing here guarantees no cross-session contamination.
 if not in_ses
     bear_fracs.clear()
     bull_fracs.clear()
     bz_on := false
     sz_on := false
-    if not na(bz_box)
-        box.delete(bz_box)
-        bz_box := na
-    if not na(sz_box)
-        box.delete(sz_box)
-        sz_box := na
 
-// ══════════════════════════════════════════════════════════════
-//  ENTRIES
-//  Entry parameters pre-computed outside if-blocks so that the
-//  same values can drive both strategy.entry() and plotshape().
-// ══════════════════════════════════════════════════════════════
 bool flat      = strategy.position_size == 0
 bool tradeable = flat and in_ses
 
-// ── LONG
 bool long_in_zone = low <= bz_top and high >= bz_bot
 bool long_cond    = tradeable and bz_on and bar_index > bz_bar and long_in_zone
 
@@ -268,7 +205,6 @@ if long_cond
     strategy.exit("L-Exit", from_entry="Long", stop=bz_sl, limit=tp_px)
     bz_on := false
 
-// ── SHORT
 bool short_in_zone = high >= sz_bot and low <= sz_top
 bool short_cond    = tradeable and sz_on and bar_index > sz_bar and short_in_zone
 
@@ -289,106 +225,66 @@ if short_cond
 if ses_end and not flat
     strategy.close_all(comment="EOD")
 
-// ══════════════════════════════════════════════════════════════
-//  VISUALS
-//  全部改用 plotshape()，無 offset，無絕對價位繪圖
-//  → Y 軸永遠只由 K 線本身決定，不會被任何指標拉伸
-// ══════════════════════════════════════════════════════════════
 bgcolor(in_lon ? color.new(color.blue,   92) : na, title="London Window")
 bgcolor(in_ny  ? color.new(color.orange, 92) : na, title="NY Window")
 
 barcolor(bull_cat and in_ses ? color.new(color.lime, 0) : na, title="Bull Catalyst")
 barcolor(bear_cat and in_ses ? color.new(color.red,  0) : na, title="Bear Catalyst")
 
-// 進場訊號
+plotshape(i_show_fvg and bull_fvg,
+     title="Bull FVG", style=shape.labelup, location=location.belowbar,
+     color=color.new(color.lime, 20), text="FVG", textcolor=color.black, size=size.tiny)
+plotshape(i_show_fvg and bear_fvg,
+     title="Bear FVG", style=shape.labeldown, location=location.abovebar,
+     color=color.new(color.red, 20), text="FVG", textcolor=color.white, size=size.tiny)
+
 plotshape(i_show_sig and long_cond and long_is_frac,
-     title    = "Long FRAC",
-     style    = shape.labelup,
-     location = location.belowbar,
-     color    = color.lime,
-     text     = "↑ L FRAC",
-     textcolor= color.black,
-     size     = size.small)
+     title="Long FRAC", style=shape.labelup, location=location.belowbar,
+     color=color.lime, text="↑ L FRAC", textcolor=color.black, size=size.small)
 plotshape(i_show_sig and long_cond and not long_is_frac,
-     title    = "Long RR",
-     style    = shape.labelup,
-     location = location.belowbar,
-     color    = color.teal,
-     text     = "↑ L RR",
-     textcolor= color.white,
-     size     = size.small)
+     title="Long RR", style=shape.labelup, location=location.belowbar,
+     color=color.teal, text="↑ L RR", textcolor=color.white, size=size.small)
 plotshape(i_show_sig and short_cond and short_is_frac,
-     title    = "Short FRAC",
-     style    = shape.labeldown,
-     location = location.abovebar,
-     color    = color.red,
-     text     = "↓ S FRAC",
-     textcolor= color.white,
-     size     = size.small)
+     title="Short FRAC", style=shape.labeldown, location=location.abovebar,
+     color=color.red, text="↓ S FRAC", textcolor=color.white, size=size.small)
 plotshape(i_show_sig and short_cond and not short_is_frac,
-     title    = "Short RR",
-     style    = shape.labeldown,
-     location = location.abovebar,
-     color    = color.maroon,
-     text     = "↓ S RR",
-     textcolor= color.white,
-     size     = size.small)
+     title="Short RR", style=shape.labeldown, location=location.abovebar,
+     color=color.maroon, text="↓ S RR", textcolor=color.white, size=size.small)
 
-// Fractal 標記（無 offset，貼在確認柱）
 plotshape(i_show_frac and bear_fractal and in_ses[N],
-     title    = "Bear Fractal",
-     style    = shape.triangledown,
-     location = location.abovebar,
-     color    = color.orange,
-     size     = size.tiny)
+     title="Bear Fractal", style=shape.triangledown, location=location.abovebar,
+     color=color.orange, size=size.tiny)
 plotshape(i_show_frac and bull_fractal and in_ses[N],
-     title    = "Bull Fractal",
-     style    = shape.triangleup,
-     location = location.belowbar,
-     color    = color.aqua,
-     size     = size.tiny)
+     title="Bull Fractal", style=shape.triangleup, location=location.belowbar,
+     color=color.blue, size=size.tiny)
 
-// ══════════════════════════════════════════════════════════════
-//  INFO TABLE  (top-right)
-// ══════════════════════════════════════════════════════════════
 var table tbl = table.new(position.top_right, 2, 7,
-     bgcolor      = color.new(color.black, 70),
-     border_color = color.new(color.gray, 50),
-     border_width = 1,
-     frame_color  = color.new(color.gray, 50),
-     frame_width  = 1)
+     bgcolor=color.new(color.black, 70), border_color=color.new(color.gray, 50),
+     border_width=1, frame_color=color.new(color.gray, 50), frame_width=1)
 
 if barstate.islastconfirmedhistory or barstate.islast
     int   total = strategy.closedtrades
     float wr    = total > 0 ? strategy.wintrades / total * 100 : 0.0
     float pf    = strategy.grossloss > 0 ? strategy.grossprofit / strategy.grossloss : 0.0
-
-    table.cell(tbl, 0, 0, "GH FVG + FRACTAL TP  v4.1",
+    table.cell(tbl, 0, 0, "GH FVG + FRACTAL TP  v5",
          text_color=color.white, text_size=size.small, bgcolor=color.new(color.navy, 60))
-    table.cell(tbl, 1, 0, "not-in-ses cleanup",
+    table.cell(tbl, 1, 0, "plotshape only",
          text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 60))
-    table.cell(tbl, 0, 1, "Win Rate",
-         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 0, 1, "Win Rate",   text_color=color.silver, text_size=size.tiny)
     table.cell(tbl, 1, 1, str.tostring(wr, "#.1") + "%",
          text_color=wr >= 65 ? color.lime : color.red, text_size=size.tiny)
-    table.cell(tbl, 0, 2, "Profit Factor",
-         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 0, 2, "Profit Factor", text_color=color.silver, text_size=size.tiny)
     table.cell(tbl, 1, 2, str.tostring(pf, "#.##"),
          text_color=pf >= 1.0 ? color.lime : color.red, text_size=size.tiny)
-    table.cell(tbl, 0, 3, "Total Trades",
-         text_color=color.silver, text_size=size.tiny)
-    table.cell(tbl, 1, 3, str.tostring(total),
-         text_color=color.white, text_size=size.tiny)
-    table.cell(tbl, 0, 4, "Net P&L",
-         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 0, 3, "Total Trades", text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 3, str.tostring(total), text_color=color.white, text_size=size.tiny)
+    table.cell(tbl, 0, 4, "Net P&L",    text_color=color.silver, text_size=size.tiny)
     table.cell(tbl, 1, 4, str.tostring(strategy.netprofit, "#.##"),
          text_color=strategy.netprofit >= 0 ? color.lime : color.red, text_size=size.tiny)
-    table.cell(tbl, 0, 5, "Max Drawdown",
-         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 0, 5, "Max Drawdown", text_color=color.silver, text_size=size.tiny)
     table.cell(tbl, 1, 5, str.tostring(strategy.max_drawdown, "#.##"),
          text_color=color.orange, text_size=size.tiny)
-    table.cell(tbl, 0, 6, "Final Equity",
-         text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 0, 6, "Final Equity", text_color=color.silver, text_size=size.tiny)
     table.cell(tbl, 1, 6, str.tostring(strategy.equity, "#.##"),
          text_color=color.white, text_size=size.tiny)
 ```
