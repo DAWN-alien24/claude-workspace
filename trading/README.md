@@ -1,8 +1,9 @@
 # Golden Hour – ICT FVG + Fractal TP Strategy
 
-**版本**: v5  
+**版本**: v6  
 **語言**: Pine Script v6  
 **類型**: Strategy (overlay)  
+**建議時間尺度**: 5M  
 **Branch**: `claude/automated-trading-mechanism-z73fw0`
 
 ---
@@ -14,10 +15,11 @@
 | Session | London 02:00–05:00 ET、NY 08:00–11:00 ET |
 | Catalyst Candle | Body > ATR × 倍數的強勢K線 |
 | FVG (Fair Value Gap) | 三根K線結構，中間K線為 Catalyst |
-| 進場 | 價格回測進入 FVG 區域時 |
-| TP | session 內最近的 Bill Williams Fractal 高/低點；找不到時用 fallback R:R |
+| 趨勢過濾 | EMA 200：收盤在 EMA 上方只做多，下方只做空 |
+| 進場 | FVG 偵測當下掛限價單（FVG 中間點） |
+| TP | session 內最近的 Bill Williams Fractal 高/低點；找不到時用 1.5R |
 | SL | FVG 底部 − ATR buffer |
-| 收盤 | Session 結束強制平倉 |
+| 收盤 | Session 結束後強制平倉並取消所有未成交限價單 |
 
 ## 視覺元素（全部 plotshape，零 box.new）
 
@@ -25,10 +27,11 @@
 |------|------|
 | 橘色 ▼ | Bear Fractal（K線上方） |
 | 藍色 ▲ | Bull Fractal（K線下方） |
-| 綠色 FVG label（下方） | Bull FVG 出現 |
-| 紅色 FVG label（上方） | Bear FVG 出現 |
-| 綠色/青色 ↑ label（下方） | Long 進場訊號（FRAC / RR） |
-| 紅色/深紅 ↓ label（上方） | Short 進場訊號（FRAC / RR） |
+| 綠色 FVG label | Bull FVG 出現（不論趨勢） |
+| 紅色 FVG label | Bear FVG 出現（不論趨勢） |
+| 綠色/青色 ↑ label | Long 限價單已掛（通過 EMA 過濾） |
+| 紅色/深紅 ↓ label | Short 限價單已掛（通過 EMA 過濾） |
+| 黃色線 | EMA 趨勢線 |
 | 藍色背景 | London session |
 | 橘色背景 | NY session |
 
@@ -41,22 +44,33 @@
 | v3 | line.new() moving anchor → 根本原因未解 |
 | v4 | 全面改用 plotshape()，但 FVG 仍用 box.new() |
 | v4.1 | ses_end 清除改為 if not in_ses |
-| **v5** | **徹底移除 box.new()；FVG 改用 plotshape()；零絕對 Y 座標** |
+| v5 | 徹底移除 box.new()；FVG 改用 plotshape() |
+| **v6** | **★ EMA 趨勢過濾 + 限價單進場 + Fallback R:R 改為 1.5** |
 
-## Y 軸飄移根本原因
+## v6 三項關鍵改進
 
-`box.new()` 會在圖上留下絕對 Y 座標的矩形。若歷史 session 的 box 沒有被正確刪除（ses_end 因資料缺口未觸發），那個舊價格的矩形就會拉伸 Y 軸，把當前 K 線壓到圖底部。
+### 1. Fallback R:R：0.49 → 1.5
+舊版找不到 Fractal TP 時，TP 設在 0.49 倍風險，賠多賺少必虧。
+新版改為 1.5R，即使勝率只有 40% 也能正期望值。
 
-**v5 解法**：移除所有 `box.new()`，改用 `plotshape(location.belowbar/abovebar)`，與期貨穩定用的畫圖方式完全相同。
+### 2. EMA 趨勢過濾
+- `close > EMA(200)` → 只接受 Long 訊號
+- `close < EMA(200)` → 只接受 Short 訊號
+- 可在 Trend Filter 群組關閉（`i_use_ema = false`）
+
+### 3. 限價單進場（取代市價單）
+- 舊版：價格進入 FVG 區域時直接市價進場（容易追高殺低）
+- 新版：FVG 偵測當下立即掛限價單在 FVG 中間點，等待精確回測
+- Zone 失效或 session 結束時自動取消未成交的限價單
 
 ---
 
-## 完整 Pine Script 程式碼（v5）
+## 完整 Pine Script 程式碼（v6）
 
 ```pine
 //@version=6
 strategy(
-     title             = "Golden Hour – ICT FVG + Fractal TP v5 (Chanelle Style)",
+     title             = "Golden Hour – ICT FVG + Fractal TP v6 (Chanelle Style)",
      overlay           = true,
      default_qty_type  = strategy.percent_of_equity,
      default_qty_value = 5,
@@ -74,22 +88,30 @@ float i_cat_mult = input.float(1.5, "Catalyst Size (× ATR)",            group=G
 float i_fvg_pct  = input.float(0.5, "FVG Entry %  (0=top · 1=bottom)", group=G2, minval=0.0, maxval=1.0, step=0.05)
 
 var string G3 = "Risk Management"
-float i_rr_fb  = input.float(0.49, "Fallback R:R (no fractal found)", group=G3, minval=0.1, step=0.05)
+float i_rr_fb  = input.float(1.5,  "Fallback R:R (no fractal found)", group=G3, minval=0.5, step=0.1)
 float i_sl_buf = input.float(0.3,  "SL Buffer (× ATR)",               group=G3, minval=0.0, step=0.05)
 float i_min_rr = input.float(0.2,  "Min R:R to accept fractal TP",    group=G3, minval=0.05, step=0.05)
 
 var string G4 = "Fractal"
 int i_frac_n = input.int(2, "Fractal Arms  (2 = 5-bar)", group=G4, minval=1, maxval=5)
 
-var string G5 = "Display"
-bool i_show_fvg  = input.bool(true, "Show FVG Signals",   group=G5)
-bool i_show_frac = input.bool(true, "Show Fractals",       group=G5)
-bool i_show_sig  = input.bool(true, "Show Entry Signals",  group=G5)
+var string G5 = "Trend Filter"
+bool i_use_ema = input.bool(true, "Enable EMA Trend Filter", group=G5)
+int  i_ema_len = input.int(200,  "EMA Length",              group=G5, minval=10)
 
-bool in_lon  = i_lon and not na(time(timeframe.period, "0200-0500", "America/New_York"))
-bool in_ny   = i_ny  and not na(time(timeframe.period, "0800-1100", "America/New_York"))
-bool in_ses  = in_lon or in_ny
-bool ses_end = in_ses[1] and not in_ses
+var string G6 = "Display"
+bool i_show_fvg  = input.bool(true, "Show FVG Signals",   group=G6)
+bool i_show_frac = input.bool(true, "Show Fractals",       group=G6)
+bool i_show_sig  = input.bool(true, "Show Entry Signals",  group=G6)
+bool i_show_ema  = input.bool(true, "Show EMA",            group=G6)
+
+bool in_lon = i_lon and not na(time(timeframe.period, "0200-0500", "America/New_York"))
+bool in_ny  = i_ny  and not na(time(timeframe.period, "0800-1100", "America/New_York"))
+bool in_ses = in_lon or in_ny
+
+float ema_val   = ta.ema(close, i_ema_len)
+bool bull_trend = not i_use_ema or close > ema_val
+bool bear_trend = not i_use_ema or close < ema_val
 
 float atr  = ta.atr(i_atr_len)
 float body = math.abs(close - open)
@@ -155,81 +177,73 @@ bool bear_fvg = high < low[2]  and bear_cat[1] and in_ses[1]
 var float bz_top = na
 var float bz_bot = na
 var bool  bz_on  = false
-var int   bz_bar = na
 
 var float sz_top = na
 var float sz_bot = na
 var bool  sz_on  = false
-var int   sz_bar = na
+
+bool flat_pos = strategy.position_size == 0
+
+float bfvg_ep  = bull_fvg ? high[2] + (low - high[2]) * (1.0 - i_fvg_pct) : na
+float bfvg_sl  = bull_fvg ? high[2] - i_sl_buf * atr : na
+float bfvg_r   = bull_fvg ? math.max(bfvg_ep - bfvg_sl, syminfo.mintick * 5) : na
+float bfvg_ftp = bull_fvg ? find_tp_above(bfvg_ep, bfvg_r) : na
+bool  bfvg_if  = not na(bfvg_ftp)
+float bfvg_tp  = bull_fvg ? (bfvg_if ? bfvg_ftp : bfvg_ep + bfvg_r * i_rr_fb) : na
+
+float sfvg_ep  = bear_fvg ? low[2] - (low[2] - high) * (1.0 - i_fvg_pct) : na
+float sfvg_sl  = bear_fvg ? low[2] + i_sl_buf * atr : na
+float sfvg_r   = bear_fvg ? math.max(sfvg_sl - sfvg_ep, syminfo.mintick * 5) : na
+float sfvg_ftp = bear_fvg ? find_tp_below(sfvg_ep, sfvg_r) : na
+bool  sfvg_if  = not na(sfvg_ftp)
+float sfvg_tp  = bear_fvg ? (sfvg_if ? sfvg_ftp : sfvg_ep - sfvg_r * i_rr_fb) : na
+
+bool long_detect  = bull_fvg and flat_pos and in_ses and bull_trend
+bool short_detect = bear_fvg and flat_pos and in_ses and bear_trend
 
 if bull_fvg
     bz_top := low
     bz_bot := high[2]
     bz_on  := true
-    bz_bar := bar_index
+    if long_detect
+        strategy.cancel("Short")
+        strategy.entry("Long", strategy.long, limit=bfvg_ep,
+             comment=(bfvg_if ? "FRAC " : "RR ") + str.tostring(bfvg_if ? (bfvg_ftp - bfvg_ep) / bfvg_r : i_rr_fb, "#.##") + "R")
+        strategy.exit("L-Exit", from_entry="Long", stop=bfvg_sl, limit=bfvg_tp)
 
 if bear_fvg
     sz_top := low[2]
     sz_bot := high
     sz_on  := true
-    sz_bar := bar_index
+    if short_detect
+        strategy.cancel("Long")
+        strategy.entry("Short", strategy.short, limit=sfvg_ep,
+             comment=(sfvg_if ? "FRAC " : "RR ") + str.tostring(sfvg_if ? (sfvg_ep - sfvg_ftp) / sfvg_r : i_rr_fb, "#.##") + "R")
+        strategy.exit("S-Exit", from_entry="Short", stop=sfvg_sl, limit=sfvg_tp)
 
 if bz_on and close < bz_bot - i_sl_buf * atr
     bz_on := false
+    strategy.cancel("Long")
 if sz_on and close > sz_top + i_sl_buf * atr
     sz_on := false
+    strategy.cancel("Short")
 
 if not in_ses
     bear_fracs.clear()
     bull_fracs.clear()
     bz_on := false
     sz_on := false
-
-bool flat      = strategy.position_size == 0
-bool tradeable = flat and in_ses
-
-bool long_in_zone = low <= bz_top and high >= bz_bot
-bool long_cond    = tradeable and bz_on and bar_index > bz_bar and long_in_zone
-
-float bz_entry     = bz_on ? bz_bot + (bz_top - bz_bot) * (1.0 - i_fvg_pct) : na
-float bz_sl        = bz_on ? bz_bot - i_sl_buf * atr : na
-float bz_risk      = bz_on ? math.max(bz_entry - bz_sl, syminfo.mintick * 5) : na
-float long_frac_tp = long_cond ? find_tp_above(bz_entry, bz_risk) : na
-bool  long_is_frac = not na(long_frac_tp)
-
-if long_cond
-    float tp_px    = long_is_frac ? long_frac_tp : bz_entry + bz_risk * i_rr_fb
-    float achieved = long_is_frac ? (long_frac_tp - bz_entry) / bz_risk : i_rr_fb
-    strategy.entry("Long", strategy.long,
-         comment = (long_is_frac ? "FRAC " : "RR ") + str.tostring(achieved, "#.##") + "R")
-    strategy.exit("L-Exit", from_entry="Long", stop=bz_sl, limit=tp_px)
-    bz_on := false
-
-bool short_in_zone = high >= sz_bot and low <= sz_top
-bool short_cond    = tradeable and sz_on and bar_index > sz_bar and short_in_zone
-
-float sz_entry      = sz_on ? sz_top - (sz_top - sz_bot) * (1.0 - i_fvg_pct) : na
-float sz_sl         = sz_on ? sz_top + i_sl_buf * atr : na
-float sz_risk       = sz_on ? math.max(sz_sl - sz_entry, syminfo.mintick * 5) : na
-float short_frac_tp = short_cond ? find_tp_below(sz_entry, sz_risk) : na
-bool  short_is_frac = not na(short_frac_tp)
-
-if short_cond
-    float tp_px    = short_is_frac ? short_frac_tp : sz_entry - sz_risk * i_rr_fb
-    float achieved = short_is_frac ? (sz_entry - short_frac_tp) / sz_risk : i_rr_fb
-    strategy.entry("Short", strategy.short,
-         comment = (short_is_frac ? "FRAC " : "RR ") + str.tostring(achieved, "#.##") + "R")
-    strategy.exit("S-Exit", from_entry="Short", stop=sz_sl, limit=tp_px)
-    sz_on := false
-
-if ses_end and not flat
-    strategy.close_all(comment="EOD")
+    strategy.cancel("Long")
+    strategy.cancel("Short")
+    if strategy.position_size != 0
+        strategy.close_all(comment="EOD")
 
 bgcolor(in_lon ? color.new(color.blue,   92) : na, title="London Window")
 bgcolor(in_ny  ? color.new(color.orange, 92) : na, title="NY Window")
-
 barcolor(bull_cat and in_ses ? color.new(color.lime, 0) : na, title="Bull Catalyst")
 barcolor(bear_cat and in_ses ? color.new(color.red,  0) : na, title="Bear Catalyst")
+
+plot(i_show_ema ? ema_val : na, title="EMA", color=color.new(color.yellow, 0), linewidth=1)
 
 plotshape(i_show_fvg and bull_fvg,
      title="Bull FVG", style=shape.labelup, location=location.belowbar,
@@ -238,16 +252,16 @@ plotshape(i_show_fvg and bear_fvg,
      title="Bear FVG", style=shape.labeldown, location=location.abovebar,
      color=color.new(color.red, 20), text="FVG", textcolor=color.white, size=size.tiny)
 
-plotshape(i_show_sig and long_cond and long_is_frac,
+plotshape(i_show_sig and long_detect and bfvg_if,
      title="Long FRAC", style=shape.labelup, location=location.belowbar,
      color=color.lime, text="↑ L FRAC", textcolor=color.black, size=size.small)
-plotshape(i_show_sig and long_cond and not long_is_frac,
+plotshape(i_show_sig and long_detect and not bfvg_if,
      title="Long RR", style=shape.labelup, location=location.belowbar,
      color=color.teal, text="↑ L RR", textcolor=color.white, size=size.small)
-plotshape(i_show_sig and short_cond and short_is_frac,
+plotshape(i_show_sig and short_detect and sfvg_if,
      title="Short FRAC", style=shape.labeldown, location=location.abovebar,
      color=color.red, text="↓ S FRAC", textcolor=color.white, size=size.small)
-plotshape(i_show_sig and short_cond and not short_is_frac,
+plotshape(i_show_sig and short_detect and not sfvg_if,
      title="Short RR", style=shape.labeldown, location=location.abovebar,
      color=color.maroon, text="↓ S RR", textcolor=color.white, size=size.small)
 
@@ -266,13 +280,13 @@ if barstate.islastconfirmedhistory or barstate.islast
     int   total = strategy.closedtrades
     float wr    = total > 0 ? strategy.wintrades / total * 100 : 0.0
     float pf    = strategy.grossloss > 0 ? strategy.grossprofit / strategy.grossloss : 0.0
-    table.cell(tbl, 0, 0, "GH FVG + FRACTAL TP  v5",
+    table.cell(tbl, 0, 0, "GH FVG + FRACTAL TP  v6",
          text_color=color.white, text_size=size.small, bgcolor=color.new(color.navy, 60))
-    table.cell(tbl, 1, 0, "plotshape only",
+    table.cell(tbl, 1, 0, "EMA+Limit+RR1.5",
          text_color=color.yellow, text_size=size.small, bgcolor=color.new(color.navy, 60))
     table.cell(tbl, 0, 1, "Win Rate",   text_color=color.silver, text_size=size.tiny)
     table.cell(tbl, 1, 1, str.tostring(wr, "#.1") + "%",
-         text_color=wr >= 65 ? color.lime : color.red, text_size=size.tiny)
+         text_color=wr >= 50 ? color.lime : color.red, text_size=size.tiny)
     table.cell(tbl, 0, 2, "Profit Factor", text_color=color.silver, text_size=size.tiny)
     table.cell(tbl, 1, 2, str.tostring(pf, "#.##"),
          text_color=pf >= 1.0 ? color.lime : color.red, text_size=size.tiny)
